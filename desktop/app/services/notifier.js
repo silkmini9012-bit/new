@@ -5,6 +5,8 @@ const { notify } = require('../lib/notify');
 const { reverseGeocode } = require('../lib/kakao');
 const { DriveTracker, distanceKm, formatDuration, kakaoMapUrl, parseJsonish, normalizeLocation } = require('../lib/logic');
 const { TripRecorder } = require('../lib/trips');
+const report = require('../lib/report');
+const { backupTrips } = require('../lib/backup');
 
 const STATE_FILE = 'state.json';
 const trackers = new Map();
@@ -63,11 +65,13 @@ function trackerFor(vin) {
       if (trip) {
         const bat = trip.batteryUsed != null ? ` · 배터리 ${trip.batteryUsed}%` : '';
         lines.push(`이번 주행: ${trip.distanceKm}km · ${formatDuration(trip.durationMin * 60000)}${bat}`);
+        if (trip.whPerKm != null) lines.push(`전비: ${trip.whPerKm}Wh/km (${trip.energyUsedKwh}kWh 사용)`);
       } else {
         const dur = formatDuration(e.durationMs);
         const dist = distanceKm(e.departLocation, e.location);
         if (dur) lines.push(`주행 시간: ${dur}${dist != null ? ` · 직선거리 ${dist.toFixed(1)}km` : ''}`);
       }
+      setTimeout(runBackup, 5000);
       const dash = trip && dashboardUrl(trip.id);
       await notify(c, `🅿️ ${c.carName} 주차`, lines.join('\n'), kakaoMapUrl(e.location, '주차 위치'), dash ? [{ label: '주행 기록', url: dash }] : []);
     },
@@ -98,6 +102,7 @@ function handle(topic, payload) {
   } else if (field === 'VehicleSpeed') rec.speed(payload);
   else if (field === 'Odometer') rec.odometer(payload);
   else if (field === 'BatteryLevel') rec.battery(payload);
+  else if (field === 'EnergyRemaining') rec.energy(payload);
   else if (field === 'Gear') {
     console.log(`[${vin}] Gear = ${payload.toString()}`);
     t.handleGear(payload);
@@ -116,5 +121,40 @@ async function checkExpiry() {
   }
 }
 setInterval(() => checkExpiry().catch(() => {}), 3600 * 1000).unref();
+
+// 기록 백업 (주차 후, 시작 시, 6시간마다)
+function runBackup() {
+  try {
+    const r = backupTrips();
+    if (!r.skipped && r.copied) console.log(`백업: ${r.copied}개 파일 → ${r.target}`);
+  } catch (e) {
+    console.error('백업 실패', e.message);
+  }
+}
+
+// 월간 리포트: 매달 1일 오전 9시(한국시간) 이후 한 번
+async function checkMonthlyReport() {
+  const now = Date.now();
+  const k = new Date(now + 9 * 3600 * 1000);
+  if (k.getUTCDate() !== 1 || k.getUTCHours() < 9) return;
+  const key = report.previousMonthKey(now);
+  const st = store.readJson('report-state.json');
+  if (st.lastSent === key) return;
+  const trips = store.readJson('trips/index.json', []);
+  const r = report.summarize(trips, key);
+  store.updateJson('report-state.json', { lastSent: key });
+  if (!r.trips) return;
+  const [py, pm] = key.split('-').map(Number);
+  const prevKey = pm === 1 ? `${py - 1}-12` : `${py}-${String(pm - 1).padStart(2, '0')}`;
+  const prev = report.summarize(trips, prevKey);
+  const c = cfg();
+  const dash = dashboardUrl();
+  await notify(c, `📊 ${c.carName} ${pm}월 주행 리포트`, report.reportText(r, prev), dash ? `${dash}#report=${key}` : null);
+  console.log(`월간 리포트 전송: ${key}`);
+}
+setInterval(() => checkMonthlyReport().catch((e) => console.error('리포트 오류', e.message)), 15 * 60 * 1000).unref();
+setInterval(runBackup, 6 * 3600 * 1000).unref();
+setTimeout(runBackup, 10000).unref();
+setTimeout(() => checkMonthlyReport().catch(() => {}), 20000).unref();
 
 module.exports = { handle, dashboardUrl };

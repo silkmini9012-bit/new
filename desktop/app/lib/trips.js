@@ -36,7 +36,7 @@ class TripRecorder {
   constructor({ now = Date.now, dir = DIR } = {}) {
     this.now = now;
     this.dir = dir;
-    this.latest = { odometerKm: null, battery: null, speedKmh: null, location: null };
+    this.latest = { odometerKm: null, battery: null, energyKwh: null, speedKmh: null, location: null };
     this.current = this._load('current.json');
     this._lastSave = 0;
   }
@@ -72,6 +72,10 @@ class TripRecorder {
     const mi = num(raw);
     if (mi != null && mi > 0) this.latest.odometerKm = mi * MI;
   }
+  energy(raw) {
+    const k = num(raw);
+    if (k != null && k >= 0 && k < 200) this.latest.energyKwh = k;
+  }
   battery(raw) {
     const b = num(raw);
     if (b != null && b >= 0 && b <= 100) this.latest.battery = b;
@@ -106,6 +110,7 @@ class TripRecorder {
       startLoc: l.location,
       startOdoKm: l.odometerKm,
       startBattery: l.battery,
+      startEnergyKwh: l.energyKwh,
       maxSpeedKmh: 0,
       points: l.location ? [[at, l.location.lat, l.location.lng, 0]] : [],
     };
@@ -131,6 +136,11 @@ class TripRecorder {
     t.avgSpeedKmh = t.durationMin ? Math.round((t.distanceKm / t.durationMin) * 60) : 0;
     t.maxSpeedKmh = Math.round(t.maxSpeedKmh || 0);
     t.batteryUsed = t.startBattery != null && t.endBattery != null ? Math.round((t.startBattery - t.endBattery) * 10) / 10 : null;
+    t.endEnergyKwh = l.energyKwh;
+    // 전비: 실제 사용한 배터리 에너지(kWh) ÷ 거리
+    const used = t.startEnergyKwh != null && t.endEnergyKwh != null ? t.startEnergyKwh - t.endEnergyKwh : null;
+    t.energyUsedKwh = used != null && used > -5 && used < 150 ? Math.round(used * 100) / 100 : null;
+    t.whPerKm = t.energyUsedKwh != null && t.distanceKm >= 0.5 ? Math.round((t.energyUsedKwh * 1000) / t.distanceKm) : null;
 
     const summary = {
       id: t.id,
@@ -145,6 +155,8 @@ class TripRecorder {
       startBattery: t.startBattery,
       endBattery: t.endBattery,
       batteryUsed: t.batteryUsed,
+      energyUsedKwh: t.energyUsedKwh,
+      whPerKm: t.whPerKm,
     };
     this._write(`${t.id}.json`, t);
     const index = this._load('index.json') || [];

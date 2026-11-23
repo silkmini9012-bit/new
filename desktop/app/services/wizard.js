@@ -210,6 +210,7 @@ const actions = {
             VehicleSpeed: { interval_seconds: 10 },
             Odometer: { interval_seconds: 30 },
             BatteryLevel: { interval_seconds: 60 },
+            EnergyRemaining: { interval_seconds: 30 },
           },
         },
       };

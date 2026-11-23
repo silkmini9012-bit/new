@@ -42,6 +42,18 @@
   #detail .top { display:flex; align-items:center; gap:10px; padding:14px; border-bottom:1px solid var(--line); }
   #detail .top button { background:none; border:0; color:var(--text); font-size:22px; padding:0 6px; }
   #map { flex:1; min-height:45vh; }
+  #replay { display:none; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line); }
+  #replay.on { display:flex; }
+  #replay button { white-space:nowrap; flex:none; background:var(--accent); color:#fff; border:0; border-radius:8px; padding:6px 12px; font-size:14px; }
+  #replay button.ghost { background:var(--card); color:var(--text); border:1px solid var(--line); }
+  #replay input { flex:1; accent-color:var(--accent); }
+  #rpInfo { font-size:12px; color:var(--sub); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
+  .rpdot { width:18px; height:18px; border-radius:50%; background:#fff; border:5px solid #3e7bfa; box-shadow:0 0 0 3px rgba(62,123,250,.3), 0 2px 6px rgba(0,0,0,.4); transform:translate(-50%,-50%); }
+  .month { padding:14px; margin-bottom:8px; }
+  .month.hl { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) inset; }
+  .month .mt { font-weight:700; margin-bottom:6px; display:flex; justify-content:space-between; }
+  .month .mg { display:grid; grid-template-columns:repeat(3,1fr); gap:6px 10px; font-size:13px; }
+  .month .mg b { display:block; font-size:16px; }
   #legend { display:flex; align-items:center; gap:8px; padding:8px 14px; font-size:12px; color:var(--sub); border-bottom:1px solid var(--line); }
   #legend .bar { flex:1; height:8px; border-radius:4px; background:linear-gradient(90deg,#e53935,#fb8c00 25%,#fdd835 50%,#7cb342 75%,#1e9e4a); }
   #dinfo { padding:14px; overflow:auto; max-height:45vh; }
@@ -71,9 +83,13 @@
     <div class="card stat"><div class="k">주행 횟수</div><div class="v" id="sCnt">-</div></div>
     <div class="card stat"><div class="k">주행 시간</div><div class="v" id="sTime">-</div></div>
     <div class="card stat"><div class="k">배터리 사용</div><div class="v" id="sBat">-</div></div>
+    <div class="card stat"><div class="k">사용 에너지</div><div class="v" id="sEnergy">-</div></div>
+    <div class="card stat"><div class="k">평균 전비</div><div class="v" id="sEff">-</div></div>
   </div>
   <h2 id="chartTitle">일별 주행 거리</h2>
   <div class="card chart"><div id="chart"></div></div>
+  <h2>월별 리포트</h2>
+  <div id="months"></div>
   <h2>주행 목록</h2>
   <div id="list"></div>
 </main>
@@ -82,6 +98,7 @@
   <div class="top"><button onclick="closeDetail()" aria-label="뒤로">←</button><div><div id="dtitle" style="font-weight:700"></div><div class="sub" id="dsub"></div></div></div>
   <div id="map"></div>
   <div id="legend"><span>🔴 정체</span><div class="bar"></div><span>원활 🟢</span><span id="legend-range" style="margin-left:6px">0 · 30 · 60+ km/h</span></div>
+  <div id="replay"><button id="rpBtn" onclick="rpToggle()">▶ 재생</button><input type="range" id="rpBar" min="0" max="1000" value="0" oninput="rpSeek(this.value / 1000)"><button class="ghost" id="rpSpd" onclick="rpSpeedUp()">×1</button><span id="rpInfo"></span></div>
   <div id="dinfo"></div>
 </div>
 
@@ -131,7 +148,12 @@ function render() {
   document.getElementById('sCnt').innerHTML = `${list.length}<small>회</small>`;
   document.getElementById('sTime').innerHTML = min >= 60 ? `${Math.floor(min/60)}<small>시간</small> ${min%60}<small>분</small>` : `${min}<small>분</small>`;
   document.getElementById('sBat').innerHTML = `${Math.round(bat)}<small>%</small>${km > 0 && bat > 0 ? `<div class="sub">100km당 ${(bat / km * 100).toFixed(1)}%</div>` : ''}`;
+  const eList = list.filter(t => t.energyUsedKwh != null && t.distanceKm > 0);
+  const eKwh = eList.reduce((a, t) => a + t.energyUsedKwh, 0), eKm = eList.reduce((a, t) => a + t.distanceKm, 0);
+  document.getElementById('sEnergy').innerHTML = eList.length ? `${eKwh.toFixed(1)}<small>kWh</small>` : '<small>기록 대기</small>';
+  document.getElementById('sEff').innerHTML = eKm >= 1 ? `${Math.round(eKwh * 1000 / eKm)}<small>Wh/km</small><div class="sub">${(eKm / eKwh).toFixed(1)} km/kWh</div>` : '<small>기록 대기</small>';
   renderChart(list, from);
+  renderMonths();
   renderList(list);
 }
 
@@ -167,7 +189,7 @@ function renderList(list) {
     const k = dayKey(t.start);
     if (k !== last) { html += `<div class="day">${dayLabel(k)}</div>`; last = k; }
     html += `<div class="card trip" onclick="openDetail('${t.id}')">
-      <div><div class="t">${hm(t.start)} → ${hm(t.end)}</div><div class="sub">${dur(t.durationMin)} · 평균 ${t.avgSpeedKmh}km/h${t.batteryUsed != null ? ` · 🔋${t.batteryUsed}%` : ''}</div></div>
+      <div><div class="t">${hm(t.start)} → ${hm(t.end)}</div><div class="sub">${dur(t.durationMin)} · 평균 ${t.avgSpeedKmh}km/h${t.batteryUsed != null ? ` · 🔋${t.batteryUsed}%` : ''}${t.whPerKm != null ? ` · ⚡${t.whPerKm}Wh/km` : ''}</div></div>
       <div class="d"><div class="km">${t.distanceKm.toFixed(1)}<span class="sub"> km</span></div></div></div>`;
   });
   document.getElementById('list').innerHTML = html;
@@ -176,6 +198,7 @@ function renderList(list) {
 let liveTimer = null, liveFirst = true;
 
 async function openLive() {
+  rpStop(); document.getElementById('replay').classList.remove('on');
   liveFirst = true;
   document.getElementById('detail').classList.add('show');
   await refreshLive();
@@ -206,6 +229,7 @@ async function refreshLive() {
     ['현재 속도', lv.speedKmh != null ? `${Math.round(lv.speedKmh)} km/h` : '-'],
     ['최고 속도', t.maxSpeedKmh ? `${Math.round(t.maxSpeedKmh)} km/h` : '-'],
     ['배터리', t.startBattery != null && lv.battery != null ? `${Math.round(t.startBattery)}% → ${Math.round(lv.battery)}%` : '-'],
+    ['사용 에너지', t.startEnergyKwh != null && lv.energyKwh != null ? `${(t.startEnergyKwh - lv.energyKwh).toFixed(2)} kWh${km >= 0.5 ? ` · ${Math.round((t.startEnergyKwh - lv.energyKwh) * 1000 / km)} Wh/km` : ''}` : '-'],
     ['기록된 위치', `${pts.length}개`],
   ];
   document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
@@ -235,6 +259,8 @@ async function openDetail(id) {
     ['거리', `${t.distanceKm.toFixed(1)} km`], ['주행 시간', dur(t.durationMin)],
     ['평균 속도', `${t.avgSpeedKmh} km/h`], ['최고 속도', t.maxSpeedKmh ? `${t.maxSpeedKmh} km/h` : '-'],
     ['배터리', t.startBattery != null && t.endBattery != null ? `${Math.round(t.startBattery)}% → ${Math.round(t.endBattery)}% (−${t.batteryUsed}%)` : '-'],
+    ['사용 에너지', t.energyUsedKwh != null ? `${t.energyUsedKwh} kWh` : '-'],
+    ['전비', t.whPerKm != null ? `${t.whPerKm} Wh/km · ${(1000 / t.whPerKm).toFixed(1)} km/kWh` : '-'],
     ['출발', `${hm(t.start)} · ${kmap(t.startLoc, '출발 위치')}`], ['도착', `${hm(t.end)} · ${kmap(t.endLoc, '주차 위치')}`],
     ['기록된 위치', `${t.points.length}개`],
   ];
@@ -251,8 +277,104 @@ async function openDetail(id) {
     const n = `https://map.naver.com/index.nhn?slng=${s0.lng}&slat=${s0.lat}&stext=${encodeURIComponent('출발')}&elng=${e0.lng}&elat=${e0.lat}&etext=${encodeURIComponent('도착')}&menu=route&pathType=0`;
     document.getElementById('dinfo').insertAdjacentHTML('afterbegin', `<div class="open"><a href="${k}" target="_blank">카카오맵</a><a href="${n}" target="_blank">네이버지도</a><a href="${g}" target="_blank">구글지도</a></div>`);
   }
-  if (await drawKakao(pts, { raw: t.points })) return;
-  drawLeaflet(pts, { raw: t.points });
+  if (await drawKakao(pts, { raw: t.points })) mapKind = 'kakao';
+  else { drawLeaflet(pts, { raw: t.points }); mapKind = 'leaflet'; }
+  setTimeout(() => rpInit(t.points), 120);
+}
+
+// ── 경로 다시보기 ──
+let mapKind = null, rp = null, rpMarker = null;
+function rpInit(raw) {
+  rpStop();
+  if (rpMarker) { try { mapKind === 'kakao' ? rpMarker.setMap(null) : rpMarker.remove(); } catch {} rpMarker = null; }
+  const box = document.getElementById('replay');
+  if (!raw || raw.length < 2 || !mapKind) { box.classList.remove('on'); return; }
+  const cum = [0], spd = [0];
+  for (let i = 1; i < raw.length; i++) {
+    const d = distKm([raw[i-1][1], raw[i-1][2]], [raw[i][1], raw[i][2]]);
+    const h = (raw[i][0] - raw[i-1][0]) / 3600000;
+    cum.push(cum[i-1] + d);
+    let v = h > 0 ? d / h : null; if (v == null || v > 200) v = raw[i][3] ?? 0;
+    spd.push(v);
+  }
+  const t0 = raw[0][0], t1 = raw[raw.length - 1][0];
+  rp = { raw, cum, spd, t0, t1, pos: 0, playing: false, speed: 1, base: Math.max(12000, Math.min(45000, (t1 - t0) / 40)) };
+  box.classList.add('on');
+  document.getElementById('rpSpd').textContent = '×1';
+  rpSeek(0);
+}
+function rpAt(pos) {
+  const { raw, cum, spd, t0, t1 } = rp;
+  const tt = t0 + pos * (t1 - t0);
+  let i = 1; while (i < raw.length - 1 && raw[i][0] < tt) i++;
+  const a = raw[i-1], b = raw[i], f = b[0] > a[0] ? Math.min(1, Math.max(0, (tt - a[0]) / (b[0] - a[0]))) : 1;
+  return { lat: a[1] + (b[1] - a[1]) * f, lng: a[2] + (b[2] - a[2]) * f, t: tt, v: spd[i], km: cum[i-1] + (cum[i] - cum[i-1]) * f };
+}
+function rpSeek(pos) {
+  if (!rp) return;
+  rp.pos = Math.max(0, Math.min(1, pos));
+  const p = rpAt(rp.pos);
+  document.getElementById('rpBar').value = Math.round(rp.pos * 1000);
+  const d = kd(p.t);
+  document.getElementById('rpInfo').textContent = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} · ${Math.round(p.v)}km/h · ${p.km.toFixed(1)}km`;
+  if (mapKind === 'kakao' && kmap) {
+    const ll = new kakao.maps.LatLng(p.lat, p.lng);
+    if (!rpMarker) rpMarker = new kakao.maps.CustomOverlay({ map: kmap, position: ll, content: '<div class="rpdot"></div>', zIndex: 10 });
+    else rpMarker.setPosition(ll);
+    if (rp.playing && !kmap.getBounds().contain(ll)) kmap.panTo(ll);
+  } else if (mapKind === 'leaflet' && map) {
+    if (!rpMarker) rpMarker = L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 4, fillColor: '#3e7bfa', fillOpacity: 1 }).addTo(map);
+    else rpMarker.setLatLng([p.lat, p.lng]);
+    if (rp.playing && !map.getBounds().contains([p.lat, p.lng])) map.panTo([p.lat, p.lng]);
+  }
+}
+function rpToggle() {
+  if (!rp) return;
+  if (rp.playing) return rpStop();
+  if (rp.pos >= 1) rp.pos = 0;
+  rp.playing = true; rp.last = performance.now();
+  document.getElementById('rpBtn').textContent = '⏸ 멈춤';
+  const step = (now) => {
+    if (!rp || !rp.playing) return;
+    rp.pos += (now - rp.last) / (rp.base / rp.speed); rp.last = now;
+    rpSeek(rp.pos);
+    if (rp.pos >= 1) return rpStop();
+    rp.raf = requestAnimationFrame(step);
+  };
+  rp.raf = requestAnimationFrame(step);
+}
+function rpStop() {
+  if (!rp) return;
+  rp.playing = false; cancelAnimationFrame(rp.raf);
+  const b = document.getElementById('rpBtn'); if (b) b.textContent = rp.pos >= 1 ? '↺ 다시' : '▶ 재생';
+}
+function rpSpeedUp() {
+  if (!rp) return;
+  rp.speed = rp.speed >= 4 ? 1 : rp.speed * 2;
+  document.getElementById('rpSpd').textContent = `×${rp.speed}`;
+}
+
+// ── 월별 리포트 ──
+function renderMonths() {
+  const by = {};
+  trips.forEach(t => { const k = dayKey(t.start).slice(0, 7); (by[k] ||= []).push(t); });
+  const keys = Object.keys(by).sort().reverse().slice(0, 12);
+  const hl = (location.hash.match(/report=(\d{4}-\d{2})/) || [])[1];
+  const sumOf = (l) => {
+    const km = l.reduce((a, t) => a + (t.distanceKm || 0), 0), min = l.reduce((a, t) => a + (t.durationMin || 0), 0);
+    const e = l.filter(t => t.energyUsedKwh != null && t.distanceKm > 0);
+    const kwh = e.reduce((a, t) => a + t.energyUsedKwh, 0), ekm = e.reduce((a, t) => a + t.distanceKm, 0);
+    return { km, min, n: l.length, kwh, eff: ekm >= 1 ? Math.round(kwh * 1000 / ekm) : null, bat: l.reduce((a, t) => a + (t.batteryUsed > 0 ? t.batteryUsed : 0), 0) };
+  };
+  document.getElementById('months').innerHTML = keys.length ? keys.map((k, i) => {
+    const r = sumOf(by[k]), prev = by[keys[i + 1]] ? sumOf(by[keys[i + 1]]) : null;
+    const diff = prev && prev.km > 0 ? Math.round((r.km - prev.km) / prev.km * 100) : null;
+    const [y, m] = k.split('-').map(Number);
+    return `<div class="card month ${k === hl ? 'hl' : ''}" id="m-${k}"><div class="mt"><span>${y}년 ${m}월</span>${diff != null ? `<span class="sub">지난달 대비 ${diff >= 0 ? '▲' : '▼'}${Math.abs(diff)}%</span>` : ''}</div>
+      <div class="mg"><div>거리<b>${r.km.toFixed(1)}km</b></div><div>주행<b>${r.n}회</b></div><div>시간<b>${r.min >= 60 ? `${Math.floor(r.min/60)}h ${r.min%60}m` : `${r.min}분`}</b></div>
+      <div>에너지<b>${r.kwh > 0 ? r.kwh.toFixed(1) + 'kWh' : '-'}</b></div><div>평균 전비<b>${r.eff ? r.eff + 'Wh/km' : '-'}</b></div><div>배터리<b>${Math.round(r.bat)}%</b></div></div></div>`;
+  }).join('') : '<div class="empty">아직 기록이 없어요</div>';
+  if (hl && !renderMonths.scrolled) { renderMonths.scrolled = true; setTimeout(() => document.getElementById('m-' + hl)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300); }
 }
 
 function loadKakao() {
@@ -366,7 +488,7 @@ function drawLeaflet(pts, opt = {}) {
     } else map.setView([37.5665, 126.978], 11);
   }, 50);
 }
-function closeDetail() { clearInterval(liveTimer); liveTimer = null; document.getElementById('detail').classList.remove('show'); history.replaceState(null, '', location.pathname); }
+function closeDetail() { rpStop(); clearInterval(liveTimer); liveTimer = null; document.getElementById('detail').classList.remove('show'); history.replaceState(null, '', location.pathname); }
 
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); period = b.dataset.p; render();
