@@ -42,6 +42,8 @@
   #detail .top { display:flex; align-items:center; gap:10px; padding:14px; border-bottom:1px solid var(--line); }
   #detail .top button { background:none; border:0; color:var(--text); font-size:22px; padding:0 6px; }
   #map { flex:1; min-height:45vh; }
+  #legend { display:flex; align-items:center; gap:8px; padding:8px 14px; font-size:12px; color:var(--sub); border-bottom:1px solid var(--line); }
+  #legend .bar { flex:1; height:8px; border-radius:4px; background:linear-gradient(90deg,#e53935,#fb8c00 25%,#fdd835 50%,#7cb342 75%,#1e9e4a); }
   #dinfo { padding:14px; overflow:auto; max-height:45vh; }
   .row { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid var(--line); }
   .row span:first-child { color:var(--sub); }
@@ -79,6 +81,7 @@
 <div id="detail">
   <div class="top"><button onclick="closeDetail()" aria-label="뒤로">←</button><div><div id="dtitle" style="font-weight:700"></div><div class="sub" id="dsub"></div></div></div>
   <div id="map"></div>
+  <div id="legend"><span>🔴 정체</span><div class="bar"></div><span>원활 🟢</span><span id="legend-range" style="margin-left:6px">0 · 30 · 60+ km/h</span></div>
   <div id="dinfo"></div>
 </div>
 
@@ -207,8 +210,8 @@ async function refreshLive() {
   ];
   document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
   const fit = liveFirst; liveFirst = false;
-  if (await drawKakao(pts, { endLabel: '현재 위치', fit })) return;
-  drawLeaflet(pts, { endLabel: '현재 위치', fit });
+  if (await drawKakao(pts, { endLabel: '현재 위치', fit, raw: t.points })) return;
+  drawLeaflet(pts, { endLabel: '현재 위치', fit, raw: t.points });
 }
 
 function distKm(a, b) {
@@ -248,8 +251,8 @@ async function openDetail(id) {
     const n = `https://map.naver.com/index.nhn?slng=${s0.lng}&slat=${s0.lat}&stext=${encodeURIComponent('출발')}&elng=${e0.lng}&elat=${e0.lat}&etext=${encodeURIComponent('도착')}&menu=route&pathType=0`;
     document.getElementById('dinfo').insertAdjacentHTML('afterbegin', `<div class="open"><a href="${k}" target="_blank">카카오맵</a><a href="${n}" target="_blank">네이버지도</a><a href="${g}" target="_blank">구글지도</a></div>`);
   }
-  if (await drawKakao(pts)) return;
-  drawLeaflet(pts);
+  if (await drawKakao(pts, { raw: t.points })) return;
+  drawLeaflet(pts, { raw: t.points });
 }
 
 function loadKakao() {
@@ -266,6 +269,53 @@ function loadKakao() {
   return kakaoReady;
 }
 
+// ── 속도별 경로 색칠: 위치가 찍힌 간격(거리 ÷ 시간)으로 구간 속도를 계산 ──
+const SPEED_STOPS = [[0, [229, 57, 53]], [15, [251, 140, 0]], [30, [253, 216, 53]], [45, [124, 179, 66]], [60, [30, 158, 74]]];
+function speedColor(v) {
+  v = Math.max(0, Math.min(60, v));
+  for (let i = 1; i < SPEED_STOPS.length; i++) {
+    const [v1, c1] = SPEED_STOPS[i - 1], [v2, c2] = SPEED_STOPS[i];
+    if (v <= v2) {
+      const t = (v - v1) / (v2 - v1);
+      return '#' + c1.map((c, k) => Math.round(c + (c2[k] - c) * t).toString(16).padStart(2, '0')).join('');
+    }
+  }
+  return '#1e9e4a';
+}
+function speedGroups(raw) {
+  if (!raw || raw.length < 2) return [];
+  // 1) 구간별 속도 (km/h)
+  const seg = [];
+  for (let i = 1; i < raw.length; i++) {
+    const a = raw[i - 1], b = raw[i];
+    const hrs = (b[0] - a[0]) / 3600000;
+    let v = hrs > 0 ? distKm([a[1], a[2]], [b[1], b[2]]) / hrs : null;
+    if (v == null || v > 200) v = b[3] ?? a[3] ?? 0; // 시간 정보가 이상하면 차가 보낸 속도 사용
+    seg.push(v);
+  }
+  // 2) 앞뒤 구간과 평균내서 GPS 튐 완화
+  const smooth = seg.map((_, i) => {
+    const w = seg.slice(Math.max(0, i - 1), i + 2);
+    return w.reduce((x, y) => x + y, 0) / w.length;
+  });
+  // 3) 이번 주행 기준으로 색 범위 정하기 (빠른 구간 상위 10% 속도 = 초록, 최소 30km/h)
+  const sorted = [...smooth].sort((x, y) => x - y);
+  const top = Math.round(Math.min(110, Math.max(30, sorted[Math.floor(sorted.length * 0.9)] || 30)) / 5) * 5;
+  speedGroups.top = top;
+  // 4) 비슷한 속도끼리 한 선으로 묶기 (범위를 12단계로)
+  const groups = [];
+  smooth.forEach((v, i) => {
+    const bin = Math.min(12, Math.floor((v / top) * 12));
+    const a = [raw[i][1], raw[i][2]], b = [raw[i + 1][1], raw[i + 1][2]];
+    const last = groups[groups.length - 1];
+    if (last && last.bin === bin) last.path.push(b);
+    else groups.push({ bin, color: speedColor(((bin + 0.5) / 12) * 60), path: [a, b] });
+  });
+  const lg = document.getElementById('legend-range');
+  if (lg) lg.textContent = `0 · ${Math.round(top / 2)} · ${top}+ km/h`;
+  return groups;
+}
+
 async function drawKakao(pts, opt = {}) {
   const endLabel = opt.endLabel || '도착', fit = opt.fit !== false;
   if (!(await loadKakao()) || typeof kakao === 'undefined' || !kakao.maps?.Map) return false;
@@ -276,11 +326,14 @@ async function drawKakao(pts, opt = {}) {
     kmap.relayout();
     if (!pts.length) return;
     const path = pts.map(p => new kakao.maps.LatLng(p[0], p[1]));
-    kshapes.push(new kakao.maps.Polyline({ map: kmap, path, strokeWeight: 6, strokeColor: '#3e7bfa', strokeOpacity: 0.9 }));
+    const groups = speedGroups(opt.raw);
+    kshapes.push(new kakao.maps.Polyline({ map: kmap, path, strokeWeight: 9, strokeColor: '#ffffff', strokeOpacity: 0.9 }));
+    if (groups.length) groups.forEach(g => kshapes.push(new kakao.maps.Polyline({ map: kmap, path: g.path.map(p => new kakao.maps.LatLng(p[0], p[1])), strokeWeight: 6, strokeColor: g.color, strokeOpacity: 1 })));
+    else kshapes.push(new kakao.maps.Polyline({ map: kmap, path, strokeWeight: 6, strokeColor: '#3e7bfa', strokeOpacity: 0.9 }));
     const label = (pos, text, color) => new kakao.maps.CustomOverlay({ map: kmap, position: pos, yAnchor: 1.6, content: `<div class="lbl" style="border-left:4px solid ${color}">${text}</div>` });
-    kshapes.push(label(path[0], '출발', '#2ecc8f'), label(path[path.length - 1], endLabel, '#f25c5c'));
-    kshapes.push(new kakao.maps.Circle({ map: kmap, center: path[0], radius: 12, strokeWeight: 2, strokeColor: '#fff', fillColor: '#2ecc8f', fillOpacity: 1 }));
-    kshapes.push(new kakao.maps.Circle({ map: kmap, center: path[path.length - 1], radius: 12, strokeWeight: 2, strokeColor: '#fff', fillColor: '#f25c5c', fillOpacity: 1 }));
+    kshapes.push(label(path[0], '출발', '#3e7bfa'), label(path[path.length - 1], endLabel, '#15171a'));
+    kshapes.push(new kakao.maps.Circle({ map: kmap, center: path[0], radius: 12, strokeWeight: 3, strokeColor: '#fff', fillColor: '#3e7bfa', fillOpacity: 1 }));
+    kshapes.push(new kakao.maps.Circle({ map: kmap, center: path[path.length - 1], radius: 12, strokeWeight: 3, strokeColor: '#fff', fillColor: '#15171a', fillOpacity: 1 }));
     if (!fit) return;
     const b = new kakao.maps.LatLngBounds(); path.forEach(p => b.extend(p));
     path.length > 1 ? kmap.setBounds(b, 40, 40, 40, 40) : kmap.setCenter(path[0]);
@@ -303,9 +356,12 @@ function drawLeaflet(pts, opt = {}) {
     if (layer) layer.remove();
     layer = L.layerGroup().addTo(map);
     if (pts.length) {
-      const line = L.polyline(pts, { color: '#3e7bfa', weight: 5, opacity: .9 }).addTo(layer);
-      L.circleMarker(pts[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#2ecc8f', fillOpacity: 1 }).bindTooltip('출발').addTo(layer);
-      L.circleMarker(pts[pts.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#f25c5c', fillOpacity: 1 }).bindTooltip(endLabel).addTo(layer);
+      const line = L.polyline(pts, { color: '#ffffff', weight: 8, opacity: .9 }).addTo(layer);
+      const groups = speedGroups(opt.raw);
+      if (groups.length) groups.forEach(g => L.polyline(g.path, { color: g.color, weight: 5, opacity: 1 }).addTo(layer));
+      else L.polyline(pts, { color: '#3e7bfa', weight: 5, opacity: .9 }).addTo(layer);
+      L.circleMarker(pts[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#3e7bfa', fillOpacity: 1 }).bindTooltip('출발').addTo(layer);
+      L.circleMarker(pts[pts.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#15171a', fillOpacity: 1 }).bindTooltip(endLabel).addTo(layer);
       if (fit) pts.length > 1 ? map.fitBounds(line.getBounds(), { padding: [30, 30] }) : map.setView(pts[0], 16);
     } else map.setView([37.5665, 126.978], 11);
   }, 50);
