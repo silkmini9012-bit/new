@@ -131,8 +131,67 @@ jobs:
           git checkout --orphan "ci-logs-${{ github.job }}"; git rm -rf --cached . > /dev/null; cp /tmp/ci.log ci.log
           git add -f ci.log; git commit -qm "build log"; git push -f origin "HEAD:ci-logs-${{ github.job }}"
 
+  smoke-test:
+    needs: windows-installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist
+      - name: Install silently and check every component starts
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            ./dist/DriveLog-Setup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART
+            APP="$LOCALAPPDATA/DriveLog"
+            ls -la "$APP" "$APP/bin" "$APP/node"
+            # 설치 후 자동 실행된 DriveLog가 설정 화면을 띄울 때까지 대기
+            ok=""
+            for i in $(seq 1 60); do
+              s=$(curl -s http://localhost:3000/api/state || true)
+              if echo "$s" | grep -q '"authUrl":"https://login.tailscale.com'; then ok=1; break; fi
+              sleep 3
+            done
+            echo "STATE: $s"
+            test -n "$ok" || { echo "FAIL: tunnel did not produce a Tailscale login URL"; cat "$APP/data/logs/"*.log; exit 1; }
+            echo "OK: wizard + tunnel (Tailscale login URL issued)"
+            curl -sf http://localhost:8090/api/trips && echo " OK: local dashboard"
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8091/api/trips); test "$code" = "401" && echo "OK: public dashboard requires token"
+            # fleet-telemetry.exe 가 설정 파일로 정상 기동하는지
+            mkdir -p /tmp/ft && cd /tmp/ft
+            openssl req -x509 -nodes -newkey rsa:2048 -keyout key.pem -out cert.pem -days 1 -subj "//CN=localhost" 2>/dev/null
+            W=$(cygpath -w /tmp/ft)
+            printf '{"host":"127.0.0.1","port":14443,"log_level":"info","json_log_enable":true,"namespace":"t","reliable_ack":false,"records":{"V":["mqtt"]},"mqtt":{"broker":"127.0.0.1:1883","client_id":"smoke","topic_base":"tesla","qos":1},"tls":{"server_cert":"%s","server_key":"%s"}}' "${W//\\/\\\\}\\\\cert.pem" "${W//\\/\\\\}\\\\key.pem" > cfg.json
+            cat cfg.json
+            ("$APP/bin/fleet-telemetry.exe" -config "$W\\cfg.json" > ft.log 2>&1 &)
+            ft=""
+            for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/14443) 2>/dev/null && { ft=1; break; }; sleep 1; done
+            cat ft.log | head -30
+            test -n "$ft" || { echo "FAIL: fleet-telemetry did not listen"; exit 1; }
+            echo "OK: fleet-telemetry listening"
+            # 서명 프록시가 정상 기동하는지
+            TESLA_HTTP_PROXY_TLS_CERT="$W\\cert.pem" TESLA_HTTP_PROXY_TLS_KEY="$W\\key.pem" TESLA_HTTP_PROXY_HOST=127.0.0.1 TESLA_HTTP_PROXY_PORT=14444 TESLA_KEY_FILE="$(cygpath -w "$APP/data/proxy/private-key.pem")" "$APP/bin/tesla-http-proxy.exe" > px.log 2>&1 &
+            px=""
+            for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/14444) 2>/dev/null && { px=1; break; }; sleep 1; done
+            cat px.log | head -20
+            test -n "$px" || { echo "FAIL: proxy did not listen"; exit 1; }
+            echo "OK: tesla-http-proxy listening"
+            echo "ALL SMOKE TESTS PASSED"
+          } 2>&1 | tee -a "$GITHUB_WORKSPACE/ci.log"
+      - name: Save test log
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
+          cp ci.log /tmp/ci.log || echo "no log" > /tmp/ci.log
+          git checkout --orphan "ci-logs-${{ github.job }}"; git rm -rf --cached . > /dev/null; cp /tmp/ci.log ci.log
+          git add -f ci.log; git commit -qm "smoke log"; git push -f origin "HEAD:ci-logs-${{ github.job }}"
+
   release:
-    needs: [windows-installer, android]
+    needs: [windows-installer, android, smoke-test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
