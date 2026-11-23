@@ -43,12 +43,12 @@
   #detail .top button { background:none; border:0; color:var(--text); font-size:22px; padding:0 6px; }
   #map { flex:1; min-height:45vh; }
   #replay { display:none; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line); }
-  #replay.on { display:flex; }
+  #replay.on { display:flex; flex-wrap:wrap; }
   #replay button { white-space:nowrap; flex:none; background:var(--accent); color:#fff; border:0; border-radius:8px; padding:6px 12px; font-size:14px; }
   #replay button.ghost { background:var(--card); color:var(--text); border:1px solid var(--line); }
   #replay input { flex:1; accent-color:var(--accent); }
-  #rpInfo { font-size:12px; color:var(--sub); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
-  .rpdot { width:18px; height:18px; border-radius:50%; background:#fff; border:5px solid #3e7bfa; box-shadow:0 0 0 3px rgba(62,123,250,.3), 0 2px 6px rgba(0,0,0,.4); transform:translate(-50%,-50%); }
+  #rpInfo { flex-basis:100%; font-size:12px; color:var(--sub); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
+  .rpdot { width:18px; height:18px; border-radius:50%; background:#fff; border:5px solid #3e7bfa; box-shadow:0 0 0 3px rgba(62,123,250,.3), 0 2px 6px rgba(0,0,0,.4); box-sizing:border-box; pointer-events:none; }
   .month { padding:14px; margin-bottom:8px; }
   .month.hl { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) inset; }
   .month .mt { font-weight:700; margin-bottom:6px; display:flex; justify-content:space-between; }
@@ -319,7 +319,7 @@ function rpSeek(pos) {
   document.getElementById('rpInfo').textContent = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} · ${Math.round(p.v)}km/h · ${p.km.toFixed(1)}km`;
   if (mapKind === 'kakao' && kmap) {
     const ll = new kakao.maps.LatLng(p.lat, p.lng);
-    if (!rpMarker) rpMarker = new kakao.maps.CustomOverlay({ map: kmap, position: ll, content: '<div class="rpdot"></div>', zIndex: 10 });
+    if (!rpMarker) rpMarker = new kakao.maps.CustomOverlay({ map: kmap, position: ll, content: '<div class="rpdot"></div>', xAnchor: 0.5, yAnchor: 0.5, zIndex: 10 });
     else rpMarker.setPosition(ll);
     if (rp.playing && !kmap.getBounds().contain(ll)) kmap.panTo(ll);
   } else if (mapKind === 'leaflet' && map) {
