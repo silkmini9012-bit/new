@@ -224,6 +224,7 @@ let liveTimer = null, liveFirst = true;
 async function openLive() {
   rpStop(); rpRemoveMarker(); rp = null; document.getElementById('replay').classList.remove('on');
   liveFirst = true;
+  pushDetail('#live');
   document.getElementById('detail').classList.add('show');
   await refreshLive();
   clearInterval(liveTimer);
@@ -274,7 +275,7 @@ async function openDetail(id) {
   clearInterval(liveTimer); liveTimer = null;
   const t = await fetch(`api/trips/${id}`).then(r => r.ok ? r.json() : null).catch(() => null);
   if (!t) return;
-  history.replaceState(null, '', `#trip=${id}`);
+  pushDetail(`#trip=${id}`);
   document.getElementById('detail').classList.add('show');
   document.getElementById('dtitle').textContent = `${dayLabel(dayKey(t.start))} ${hm(t.start)} → ${hm(t.end)}`;
   document.getElementById('dsub').textContent = `${t.distanceKm.toFixed(1)}km · ${dur(t.durationMin)}`;
@@ -612,7 +613,25 @@ function drawLeaflet(pts, opt = {}) {
     } else map.setView([37.5665, 126.978], 11);
   }, 50);
 }
-function closeDetail() { rpStop(); clearInterval(liveTimer); liveTimer = null; document.getElementById('detail').classList.remove('show'); history.replaceState(null, '', location.pathname); }
+// 상세/실시간 화면은 기록(history)에 한 칸 쌓아서, 폰의 뒤로가기 버튼으로 목록에 돌아오게 함
+function pushDetail(hash) {
+  if (history.state && history.state.detail) return history.replaceState({ detail: true }, '', hash);
+  if (!history.state) history.replaceState({ list: true }, '', location.pathname);
+  history.pushState({ detail: true }, '', hash);
+}
+function hideDetail() { rpStop(); clearInterval(liveTimer); liveTimer = null; document.getElementById('detail').classList.remove('show'); }
+function closeDetail() {
+  if (history.state && history.state.detail) return history.back();   // popstate에서 닫힘
+  hideDetail(); history.replaceState(null, '', location.pathname);
+}
+window.addEventListener('popstate', (e) => {
+  if (e.state && e.state.detail) {
+    const m = location.hash.match(/trip=(\d{8}-\d{6})/);
+    if (m && !document.getElementById('detail').classList.contains('show')) openDetail(m[1]);
+    return;
+  }
+  hideDetail();
+});
 
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); period = b.dataset.p; render();
