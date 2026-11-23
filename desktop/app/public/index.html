@@ -42,13 +42,24 @@
   #detail .top { display:flex; align-items:center; gap:10px; padding:14px; border-bottom:1px solid var(--line); }
   #detail .top button { background:none; border:0; color:var(--text); font-size:22px; padding:0 6px; }
   #map { flex:1; min-height:45vh; }
-  #replay { display:none; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line); }
-  #replay.on { display:flex; flex-wrap:wrap; }
-  #replay button { white-space:nowrap; flex:none; background:var(--accent); color:#fff; border:0; border-radius:8px; padding:6px 12px; font-size:14px; }
-  #replay button.ghost { background:var(--card); color:var(--text); border:1px solid var(--line); }
-  #replay input { flex:1; accent-color:var(--accent); }
-  #rpInfo { flex-basis:100%; font-size:12px; color:var(--sub); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
-  .rpdot { width:18px; height:18px; border-radius:50%; background:#fff; border:5px solid #3e7bfa; box-shadow:0 0 0 3px rgba(62,123,250,.3), 0 2px 6px rgba(0,0,0,.4); box-sizing:border-box; pointer-events:none; }
+  #replay { display:none; flex-direction:column; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); }
+  #replay.on { display:flex; }
+  #replay .rr { display:flex; align-items:center; gap:8px; }
+  #replay button { white-space:nowrap; flex:none; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:14px; font-variant-numeric:tabular-nums; }
+  #replay button.main { background:var(--accent); color:#fff; border-color:var(--accent); min-width:78px; }
+  #replay button:active { opacity:.7; }
+  #replay input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
+  #replay .spd { display:flex; align-items:center; border:1px solid var(--line); border-radius:8px; overflow:hidden; flex:none; }
+  #replay .spd button { border:0; border-radius:0; padding:6px 9px; }
+  #replay .spd span { min-width:34px; text-align:center; font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
+  #replay label { display:flex; align-items:center; gap:4px; font-size:13px; color:var(--text); white-space:nowrap; }
+  #replay label input { width:16px; height:16px; accent-color:var(--accent); }
+  #replay .sp { flex:1; }
+  #rpInfo { display:flex; justify-content:space-between; font-size:12px; color:var(--sub); font-variant-numeric:tabular-nums; }
+  #rpInfo b { color:var(--text); font-weight:600; }
+  .rpdot { position:relative; width:26px; height:26px; border-radius:50%; background:#3e7bfa; border:3px solid #fff; box-shadow:0 0 0 4px rgba(62,123,250,.28), 0 2px 6px rgba(0,0,0,.45); box-sizing:border-box; pointer-events:none; transition:transform .25s linear; }
+  .rpdot::after { content:''; position:absolute; left:50%; top:3px; margin-left:-5px; border-left:5px solid transparent; border-right:5px solid transparent; border-bottom:10px solid #fff; }
+  .rpdot.stop::after { top:50%; margin-top:-4px; margin-left:-4px; border:0; width:8px; height:8px; background:#fff; border-radius:2px; }
   .month { padding:14px; margin-bottom:8px; }
   .month.hl { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) inset; }
   .month .mt { font-weight:700; margin-bottom:6px; display:flex; justify-content:space-between; }
@@ -98,7 +109,20 @@
   <div class="top"><button onclick="closeDetail()" aria-label="뒤로">←</button><div><div id="dtitle" style="font-weight:700"></div><div class="sub" id="dsub"></div></div></div>
   <div id="map"></div>
   <div id="legend"><span>🔴 정체</span><div class="bar"></div><span>원활 🟢</span><span id="legend-range" style="margin-left:6px">0 · 30 · 60+ km/h</span></div>
-  <div id="replay"><button id="rpBtn" onclick="rpToggle()">▶ 재생</button><input type="range" id="rpBar" min="0" max="1000" value="0" oninput="rpSeek(this.value / 1000)"><button class="ghost" id="rpSpd" onclick="rpSpeedUp()">×1</button><span id="rpInfo"></span></div>
+  <div id="replay">
+    <div class="rr"><button class="main" id="rpBtn" onclick="rpToggle()">▶ 재생</button><input type="range" id="rpBar" min="0" max="1000" value="0" oninput="rpSeek(this.value / 1000, true)"></div>
+    <div class="rr">
+      <button onclick="rpJump(-1)" title="5초 뒤로 (←)">⏪ 5초</button><button onclick="rpJump(1)" title="5초 앞으로 (→)">5초 ⏩</button>
+      <div class="spd"><button onclick="rpSpeed(-1)">−</button><span id="rpSpd">×1</span><button onclick="rpSpeed(1)">+</button></div>
+      <span class="sp"></span>
+      <button onclick="rpFit()" title="전체 경로 보기">⤢</button>
+    </div>
+    <div class="rr">
+      <label><input type="checkbox" id="rpFollow" onchange="rpSetFollow(this.checked)">아이콘 고정</label>
+      <label><input type="checkbox" id="rpSkip" onchange="rpOpt('skip', this.checked)">정차 구간 빠르게</label>
+    </div>
+    <div id="rpInfo"></div>
+  </div>
   <div id="dinfo"></div>
 </div>
 
@@ -198,7 +222,7 @@ function renderList(list) {
 let liveTimer = null, liveFirst = true;
 
 async function openLive() {
-  rpStop(); document.getElementById('replay').classList.remove('on');
+  rpStop(); rpRemoveMarker(); rp = null; document.getElementById('replay').classList.remove('on');
   liveFirst = true;
   document.getElementById('detail').classList.add('show');
   await refreshLive();
@@ -279,53 +303,94 @@ async function openDetail(id) {
   }
   if (await drawKakao(pts, { raw: t.points })) mapKind = 'kakao';
   else { drawLeaflet(pts, { raw: t.points }); mapKind = 'leaflet'; }
-  setTimeout(() => rpInit(t.points), 120);
+  setTimeout(() => rpInit(t.points, t.distanceKm), 120);
 }
 
 // ── 경로 다시보기 ──
-let mapKind = null, rp = null, rpMarker = null;
-function rpInit(raw) {
-  rpStop();
-  if (rpMarker) { try { mapKind === 'kakao' ? rpMarker.setMap(null) : rpMarker.remove(); } catch {} rpMarker = null; }
+// ×1 = 실제 주행 10초를 1초에 재생, ×n = n배 더 빠르게. 5초 이동 = 재생 화면 기준 5초(×1이면 주행 50초)
+const RP_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50, 100];
+const rpPref = (() => { try { return JSON.parse(localStorage.getItem('rpPref') || '{}'); } catch { return {}; } })();
+function rpOpt(k, v) { rpPref[k] = v; try { localStorage.setItem('rpPref', JSON.stringify(rpPref)); } catch {} }
+let mapKind = null, rp = null, rpMarker = null, rpEl = null;
+function rpRemoveMarker() {
+  if (rpMarker) { try { mapKind === 'kakao' ? rpMarker.setMap(null) : rpMarker.remove(); } catch {} }
+  rpMarker = null; rpEl = null;
+}
+function rpInit(raw, tripKm) {
+  rpStop(); rpRemoveMarker();
   const box = document.getElementById('replay');
-  if (!raw || raw.length < 2 || !mapKind) { box.classList.remove('on'); return; }
-  const cum = [0], spd = [0];
+  if (!raw || raw.length < 2 || !mapKind) { box.classList.remove('on'); rp = null; return; }
+  const cum = [0], spd = [0], brg = [0];
   for (let i = 1; i < raw.length; i++) {
     const d = distKm([raw[i-1][1], raw[i-1][2]], [raw[i][1], raw[i][2]]);
     const h = (raw[i][0] - raw[i-1][0]) / 3600000;
     cum.push(cum[i-1] + d);
     let v = h > 0 ? d / h : null; if (v == null || v > 200) v = raw[i][3] ?? 0;
     spd.push(v);
+    brg.push(d > 0.003 ? bearing(raw[i-1], raw[i]) : brg[i-1]);
   }
+  for (let i = 1; i < brg.length; i++) if (cum[i] - cum[i-1] <= 0.003 && i > 1) brg[i] = brg[i-1];
+  const firstMove = brg.findIndex((x, i) => i > 0 && cum[i] - cum[i-1] > 0.003);
+  if (firstMove > 0) for (let i = 0; i < firstMove; i++) brg[i] = brg[firstMove];
   const t0 = raw[0][0], t1 = raw[raw.length - 1][0];
-  rp = { raw, cum, spd, t0, t1, pos: 0, playing: false, speed: 1, base: Math.max(12000, Math.min(45000, (t1 - t0) / 40)) };
+  const si = RP_STEPS.indexOf(rpPref.speed);
+  const pathKm = cum[cum.length - 1];
+  const kmScale = tripKm > 0 && pathKm > 0 ? tripKm / pathKm : 1;          // 표시 거리는 계기판 거리 기준으로 맞춤
+  rp = { raw, cum, spd, brg, t0, t1, kmScale, pos: 0, playing: false, si: si >= 0 ? si : 0 };
+  document.getElementById('rpFollow').checked = !!rpPref.follow;
+  document.getElementById('rpSkip').checked = rpPref.skip !== false;
   box.classList.add('on');
-  document.getElementById('rpSpd').textContent = '×1';
+  rpShowSpeed();
+  rpBindMap();
   rpSeek(0);
 }
-function rpAt(pos) {
-  const { raw, cum, spd, t0, t1 } = rp;
-  const tt = t0 + pos * (t1 - t0);
-  let i = 1; while (i < raw.length - 1 && raw[i][0] < tt) i++;
-  const a = raw[i-1], b = raw[i], f = b[0] > a[0] ? Math.min(1, Math.max(0, (tt - a[0]) / (b[0] - a[0]))) : 1;
-  return { lat: a[1] + (b[1] - a[1]) * f, lng: a[2] + (b[2] - a[2]) * f, t: tt, v: spd[i], km: cum[i-1] + (cum[i] - cum[i-1]) * f };
+function bearing(a, b) {
+  const r = Math.PI / 180, la1 = a[1] * r, la2 = b[1] * r, dl = (b[2] - a[2]) * r;
+  const y = Math.sin(dl) * Math.cos(la2), x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dl);
+  return (Math.atan2(y, x) / r + 360) % 360;
 }
-function rpSeek(pos) {
+function rpIndex(tt) { const { raw } = rp; let i = 1; while (i < raw.length - 1 && raw[i][0] < tt) i++; return i; }
+function rpAt(pos) {
+  const { raw, cum, spd, brg, t0, t1 } = rp;
+  const tt = t0 + pos * (t1 - t0);
+  const i = rpIndex(tt);
+  const a = raw[i-1], b = raw[i], f = b[0] > a[0] ? Math.min(1, Math.max(0, (tt - a[0]) / (b[0] - a[0]))) : 1;
+  return { i, lat: a[1] + (b[1] - a[1]) * f, lng: a[2] + (b[2] - a[2]) * f, t: tt, v: spd[i], km: cum[i-1] + (cum[i] - cum[i-1]) * f, brg: brg[i], moving: cum[i] - cum[i-1] > 0.003 };
+}
+const hms = (ms) => { const d = kd(ms); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
+const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
+function rpSeek(pos, user) {
   if (!rp) return;
   rp.pos = Math.max(0, Math.min(1, pos));
+  if (user && rp.pos < 1) { const b = document.getElementById('rpBtn'); if (!rp.playing && b) b.textContent = '▶ 재생'; }
   const p = rpAt(rp.pos);
   document.getElementById('rpBar').value = Math.round(rp.pos * 1000);
-  const d = kd(p.t);
-  document.getElementById('rpInfo').textContent = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} · ${Math.round(p.v)}km/h · ${p.km.toFixed(1)}km`;
+  const total = rp.cum[rp.cum.length - 1] * rp.kmScale;
+  document.getElementById('rpInfo').innerHTML =
+    `<span><b>${hms(p.t)}</b> · <b>${Math.round(p.v)}</b>km/h</span><span>${(p.km * rp.kmScale).toFixed(1)} / ${total.toFixed(1)}km · ${mmss(p.t - rp.t0)} / ${mmss(rp.t1 - rp.t0)}</span>`;
+  const follow = document.getElementById('rpFollow').checked;
   if (mapKind === 'kakao' && kmap) {
     const ll = new kakao.maps.LatLng(p.lat, p.lng);
-    if (!rpMarker) rpMarker = new kakao.maps.CustomOverlay({ map: kmap, position: ll, content: '<div class="rpdot"></div>', xAnchor: 0.5, yAnchor: 0.5, zIndex: 10 });
-    else rpMarker.setPosition(ll);
-    if (rp.playing && !kmap.getBounds().contain(ll)) kmap.panTo(ll);
+    if (!rpMarker) {
+      rpEl = document.createElement('div'); rpEl.className = 'rpdot';
+      rpMarker = new kakao.maps.CustomOverlay({ map: kmap, position: ll, content: rpEl, xAnchor: 0.5, yAnchor: 0.5, zIndex: 10 });
+    } else rpMarker.setPosition(ll);
+    if (follow) kmap.setCenter(ll);
+    else if (rp.playing && !kmap.getBounds().contain(ll)) kmap.panTo(ll);
   } else if (mapKind === 'leaflet' && map) {
-    if (!rpMarker) rpMarker = L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 4, fillColor: '#3e7bfa', fillOpacity: 1 }).addTo(map);
-    else rpMarker.setLatLng([p.lat, p.lng]);
-    if (rp.playing && !map.getBounds().contains([p.lat, p.lng])) map.panTo([p.lat, p.lng]);
+    if (!rpMarker) {
+      rpMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div class="rpdot"></div>', iconSize: [26, 26], iconAnchor: [13, 13] }), interactive: false, zIndexOffset: 1000 }).addTo(map);
+      rpEl = rpMarker.getElement()?.firstChild;
+    } else rpMarker.setLatLng([p.lat, p.lng]);
+    if (follow) map.setView([p.lat, p.lng], map.getZoom(), { animate: false });
+    else if (rp.playing && !map.getBounds().contains([p.lat, p.lng])) map.panTo([p.lat, p.lng]);
+  }
+  if (rpEl) {
+    // 회전은 짧은 쪽으로 돌도록 누적 각도 사용
+    const prev = rp.rot ?? p.brg; let d = ((p.brg - prev) % 360 + 540) % 360 - 180;
+    rp.rot = prev + d;
+    rpEl.style.transform = `rotate(${rp.rot}deg)`;
+    rpEl.classList.toggle('stop', !p.moving && p.v < 2);
   }
 }
 function rpToggle() {
@@ -336,8 +401,13 @@ function rpToggle() {
   document.getElementById('rpBtn').textContent = '⏸ 멈춤';
   const step = (now) => {
     if (!rp || !rp.playing) return;
-    rp.pos += (now - rp.last) / (rp.base / rp.speed); rp.last = now;
-    rpSeek(rp.pos);
+    const dt = Math.min(now - rp.last, 200); rp.last = now;
+    let rate = 10 * RP_STEPS[rp.si];                       // 실제 주행 ms / 재생 ms
+    if (document.getElementById('rpSkip').checked) {
+      const i = rpIndex(rp.t0 + rp.pos * (rp.t1 - rp.t0));
+      if (rp.spd[i] < 3 && rp.cum[i] - rp.cum[i-1] < 0.01) rate *= 8;   // 신호대기·정차 구간은 8배 빨리
+    }
+    rpSeek(rp.pos + dt * rate / (rp.t1 - rp.t0));
     if (rp.pos >= 1) return rpStop();
     rp.raf = requestAnimationFrame(step);
   };
@@ -348,11 +418,64 @@ function rpStop() {
   rp.playing = false; cancelAnimationFrame(rp.raf);
   const b = document.getElementById('rpBtn'); if (b) b.textContent = rp.pos >= 1 ? '↺ 다시' : '▶ 재생';
 }
-function rpSpeedUp() {
+function rpJump(dir) {
   if (!rp) return;
-  rp.speed = rp.speed >= 4 ? 1 : rp.speed * 2;
-  document.getElementById('rpSpd').textContent = `×${rp.speed}`;
+  rpSeek(rp.pos + dir * 5000 * 10 / (rp.t1 - rp.t0), true);
 }
+function rpShowSpeed() { document.getElementById('rpSpd').textContent = `×${RP_STEPS[rp.si]}`; }
+function rpSpeed(d) {
+  if (!rp) return;
+  rp.si = Math.max(0, Math.min(RP_STEPS.length - 1, rp.si + d));
+  rpShowSpeed(); rpOpt('speed', RP_STEPS[rp.si]);
+}
+function rpSetFollow(on) {
+  rpOpt('follow', on);
+  if (!rp || !on) return;
+  if (mapKind === 'kakao' && kmap && kmap.getLevel() > 4) kmap.setLevel(4);
+  if (mapKind === 'leaflet' && map && map.getZoom() < 16) map.setZoom(16, { animate: false });
+  rpSeek(rp.pos);
+}
+function rpFit() {
+  if (!rp) return;
+  const f = document.getElementById('rpFollow'); if (f.checked) { f.checked = false; rpOpt('follow', false); }
+  if (mapKind === 'kakao' && kmap) { const b = new kakao.maps.LatLngBounds(); rp.raw.forEach(q => b.extend(new kakao.maps.LatLng(q[1], q[2]))); kmap.setBounds(b, 40, 40, 40, 40); }
+  else if (mapKind === 'leaflet' && map) map.fitBounds(rp.raw.map(q => [q[1], q[2]]), { padding: [30, 30] });
+}
+// 지도 드래그하면 고정 해제, 경로 근처를 누르면 그 지점으로 이동
+function rpBindMap() {
+  const unfollow = () => { const f = document.getElementById('rpFollow'); if (f.checked && rp) { f.checked = false; rpOpt('follow', false); } };
+  const jumpNear = (lat, lng, px) => {
+    if (!rp) return;
+    let best = -1, bd = Infinity;
+    rp.raw.forEach((q, i) => { const d = px(q[1], q[2], lat, lng); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0 && bd < 30) rpSeek((rp.raw[best][0] - rp.t0) / (rp.t1 - rp.t0), true);
+  };
+  if (mapKind === 'kakao' && kmap && !kmap._rpBound) {
+    kmap._rpBound = true;
+    kakao.maps.event.addListener(kmap, 'dragstart', unfollow);
+    kakao.maps.event.addListener(kmap, 'click', (e) => {
+      const pj = kmap.getProjection();
+      const c = pj.containerPointFromCoords(e.latLng);
+      jumpNear(e.latLng.getLat(), e.latLng.getLng(), (la, ln) => { const p = pj.containerPointFromCoords(new kakao.maps.LatLng(la, ln)); return Math.hypot(p.x - c.x, p.y - c.y); });
+    });
+  } else if (mapKind === 'leaflet' && map && !map._rpBound) {
+    map._rpBound = true;
+    map.on('dragstart', unfollow);
+    map.on('click', (e) => {
+      const c = map.latLngToContainerPoint(e.latlng);
+      jumpNear(e.latlng.lat, e.latlng.lng, (la, ln) => { const p = map.latLngToContainerPoint([la, ln]); return Math.hypot(p.x - c.x, p.y - c.y); });
+    });
+  }
+}
+document.addEventListener('keydown', (e) => {
+  if (!rp || !document.getElementById('replay').classList.contains('on') || !document.getElementById('detail').classList.contains('show')) return;
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if (e.key === ' ') { e.preventDefault(); rpToggle(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); rpJump(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); rpJump(1); }
+  else if (e.key === '+' || e.key === '=') rpSpeed(1);
+  else if (e.key === '-') rpSpeed(-1);
+});
 
 // ── 월별 리포트 ──
 function renderMonths() {
