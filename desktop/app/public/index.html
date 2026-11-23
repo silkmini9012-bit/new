@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111214">
+<title>주행 기록</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#111214; --card:#1b1d21; --line:#2a2d33; --text:#eceef1; --sub:#9aa0a8; --accent:#3e7bfa; --good:#2ecc8f; --warn:#f2a33a; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f4f5f7; --card:#fff; --line:#e3e5e9; --text:#15171a; --sub:#6b7079; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
+  header { padding:20px 18px 8px; display:flex; align-items:baseline; justify-content:space-between; }
+  h1 { font-size:22px; margin:0; letter-spacing:-.3px; }
+  .sub { color:var(--sub); font-size:13px; }
+  main { padding:0 14px 40px; max-width:760px; margin:0 auto; }
+  .tabs { display:flex; gap:6px; margin:10px 0 14px; }
+  .tabs button { flex:1; border:1px solid var(--line); background:var(--card); color:var(--sub); padding:9px 0; border-radius:10px; font-size:14px; }
+  .tabs button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  @media (min-width:600px){ .grid { grid-template-columns:repeat(4,1fr); } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .stat .v { font-size:24px; font-weight:700; letter-spacing:-.5px; }
+  .stat .v small { font-size:13px; font-weight:500; color:var(--sub); margin-left:2px; }
+  .stat .k { color:var(--sub); font-size:12px; margin-bottom:2px; }
+  h2 { font-size:15px; margin:22px 4px 8px; color:var(--sub); font-weight:600; }
+  .chart svg { width:100%; height:150px; display:block; }
+  .day { margin:16px 4px 6px; font-size:13px; color:var(--sub); font-weight:600; }
+  .trip { display:flex; align-items:center; gap:12px; padding:12px 14px; margin-bottom:8px; cursor:pointer; }
+  .trip .t { font-weight:600; }
+  .trip .d { margin-left:auto; text-align:right; }
+  .trip .km { font-weight:700; font-size:17px; }
+  .pill { display:inline-block; font-size:11px; padding:2px 7px; border-radius:99px; background:var(--line); color:var(--sub); margin-left:6px; }
+  .live { background:var(--good); color:#06281b; }
+  .empty { text-align:center; color:var(--sub); padding:40px 10px; }
+  #detail { position:fixed; inset:0; background:var(--bg); z-index:1000; display:none; flex-direction:column; }
+  #detail.show { display:flex; }
+  #detail .top { display:flex; align-items:center; gap:10px; padding:14px; border-bottom:1px solid var(--line); }
+  #detail .top button { background:none; border:0; color:var(--text); font-size:22px; padding:0 6px; }
+  #map { flex:1; min-height:45vh; }
+  #dinfo { padding:14px; overflow:auto; max-height:45vh; }
+  .row { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid var(--line); }
+  .row span:first-child { color:var(--sub); }
+  a { color:var(--accent); }
+  .open { display:flex; gap:8px; margin:12px 0 4px; }
+  .open a { flex:1; text-align:center; padding:10px 0; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); text-decoration:none; font-size:14px; }
+  .lbl { background:#fff; color:#111; border-radius:6px; padding:2px 6px; font-size:12px; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,.3); }
+</style>
+</head>
+<body>
+<header>
+  <div><h1 id="title">주행 기록</h1><div class="sub" id="carsub"></div></div>
+  <button onclick="load()" style="background:none;border:0;color:var(--sub);font-size:20px" title="새로고침">⟳</button>
+</header>
+<main>
+  <div class="tabs">
+    <button data-p="week" class="on">이번 주</button>
+    <button data-p="month">이번 달</button>
+    <button data-p="year">올해</button>
+    <button data-p="all">전체</button>
+  </div>
+  <div id="live"></div>
+  <div class="grid">
+    <div class="card stat"><div class="k">총 거리</div><div class="v" id="sKm">-</div></div>
+    <div class="card stat"><div class="k">주행 횟수</div><div class="v" id="sCnt">-</div></div>
+    <div class="card stat"><div class="k">주행 시간</div><div class="v" id="sTime">-</div></div>
+    <div class="card stat"><div class="k">배터리 사용</div><div class="v" id="sBat">-</div></div>
+  </div>
+  <h2 id="chartTitle">일별 주행 거리</h2>
+  <div class="card chart"><div id="chart"></div></div>
+  <h2>주행 목록</h2>
+  <div id="list"></div>
+</main>
+
+<div id="detail">
+  <div class="top"><button onclick="closeDetail()" aria-label="뒤로">←</button><div><div id="dtitle" style="font-weight:700"></div><div class="sub" id="dsub"></div></div></div>
+  <div id="map"></div>
+  <div id="dinfo"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let trips = [], period = 'week', map, layer, kmap, kshapes = [], kakaoKey = '', kakaoReady = null;
+const KST = 9 * 3600 * 1000;
+const kd = (ms) => new Date(ms + KST);                       // KST 기준 Date (UTC getter로 읽기)
+const pad = (n) => String(n).padStart(2, '0');
+const dayKey = (ms) => { const d = kd(ms); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; };
+const hm = (ms) => { const d = kd(ms); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+const dur = (min) => min >= 60 ? `${Math.floor(min/60)}시간 ${min%60}분` : `${min}분`;
+const WD = ['일','월','화','수','목','금','토'];
+const dayLabel = (key) => { const [y,m,d] = key.split('-').map(Number); const w = new Date(Date.UTC(y,m-1,d)).getUTCDay(); return `${m}월 ${d}일 (${WD[w]})`; };
+
+function periodStart(p) {
+  const n = kd(Date.now()); const y = n.getUTCFullYear(), m = n.getUTCMonth(), d = n.getUTCDate();
+  if (p === 'week') { const w = (n.getUTCDay() + 6) % 7; return Date.UTC(y, m, d - w) - KST; } // 월요일 시작
+  if (p === 'month') return Date.UTC(y, m, 1) - KST;
+  if (p === 'year') return Date.UTC(y, 0, 1) - KST;
+  return 0;
+}
+
+async function load() {
+  const [t, cur, s] = await Promise.all([
+    fetch('api/trips').then(r => r.json()).catch(() => []),
+    fetch('api/current').then(r => r.json()).catch(() => null),
+    fetch('api/settings').then(r => r.json()).catch(() => ({})),
+  ]);
+  trips = t || [];
+  kakaoKey = s.kakaoJsKey || '';
+  document.getElementById('title').textContent = `${s.carName || '내 테슬라'} 주행 기록`;
+  document.getElementById('carsub').textContent = s.vin ? `VIN ${s.vin}` : '';
+  document.getElementById('live').innerHTML = cur && cur.start ? `<div class="card trip" style="margin-bottom:10px" onclick="openLive()"><div>🚗 <b>주행 중</b> <span class="pill live">${hm(cur.start)} 출발</span><div class="sub">눌러서 실시간 경로 보기</div></div><div class="d" style="font-size:22px">›</div></div>` : '';
+  render();
+  const m = location.hash.match(/trip=(\d{8}-\d{6})/);
+  if (m) openDetail(m[1]);
+}
+
+function render() {
+  const from = periodStart(period);
+  const list = trips.filter(t => t.start >= from);
+  const km = list.reduce((a, t) => a + (t.distanceKm || 0), 0);
+  const min = list.reduce((a, t) => a + (t.durationMin || 0), 0);
+  const bat = list.reduce((a, t) => a + (t.batteryUsed > 0 ? t.batteryUsed : 0), 0);
+  document.getElementById('sKm').innerHTML = `${km.toFixed(1)}<small>km</small>`;
+  document.getElementById('sCnt').innerHTML = `${list.length}<small>회</small>`;
+  document.getElementById('sTime').innerHTML = min >= 60 ? `${Math.floor(min/60)}<small>시간</small> ${min%60}<small>분</small>` : `${min}<small>분</small>`;
+  document.getElementById('sBat').innerHTML = `${Math.round(bat)}<small>%</small>${km > 0 && bat > 0 ? `<div class="sub">100km당 ${(bat / km * 100).toFixed(1)}%</div>` : ''}`;
+  renderChart(list, from);
+  renderList(list);
+}
+
+function renderChart(list, from) {
+  const byDay = {};
+  list.forEach(t => { const k = dayKey(t.start); byDay[k] = (byDay[k] || 0) + (t.distanceKm || 0); });
+  let days = [];
+  if (period === 'week' || period === 'month') {
+    const end = Date.now(); for (let t = from; t <= end; t += 86400000) days.push(dayKey(t));
+  } else {
+    // 올해/전체: 월별
+    const byMon = {}; list.forEach(t => { const k = dayKey(t.start).slice(0, 7); byMon[k] = (byMon[k] || 0) + (t.distanceKm || 0); });
+    Object.assign(byDay, byMon); days = Object.keys(byMon).sort().slice(-12);
+  }
+  document.getElementById('chartTitle').textContent = days[0]?.length === 7 ? '월별 주행 거리' : '일별 주행 거리';
+  if (!days.length) { document.getElementById('chart').innerHTML = '<div class="empty">기록이 없어요</div>'; return; }
+  const max = Math.max(1, ...days.map(d => byDay[d] || 0));
+  const W = 100 / days.length, H = 120;
+  const bars = days.map((d, i) => {
+    const v = byDay[d] || 0, h = v / max * (H - 18);
+    const label = d.length === 7 ? `${+d.slice(5)}월` : (days.length > 10 ? (+d.slice(8) % 5 === 1 ? +d.slice(8) : '') : `${WD[new Date(d + 'T00:00:00Z').getUTCDay()]}`);
+    return `<rect x="${i*W + W*0.18}%" y="${H - h}" width="${W*0.64}%" height="${Math.max(h, v ? 2 : 0)}" rx="3" fill="var(--accent)"><title>${d} ${v.toFixed(1)}km</title></rect>`
+      + (v && days.length <= 10 ? `<text x="${i*W + W/2}%" y="${H - h - 4}" text-anchor="middle" font-size="10" fill="var(--sub)">${v.toFixed(0)}</text>` : '')
+      + `<text x="${i*W + W/2}%" y="${H + 16}" text-anchor="middle" font-size="11" fill="var(--sub)">${label}</text>`;
+  }).join('');
+  document.getElementById('chart').innerHTML = `<svg width="100%" height="150"><line x1="0" x2="100%" y1="${H}" y2="${H}" stroke="var(--line)"/>${bars}</svg>`;
+}
+
+function renderList(list) {
+  if (!list.length) { document.getElementById('list').innerHTML = '<div class="empty">아직 이 기간의 주행 기록이 없어요.<br>차를 출발→주차하면 자동으로 기록돼요.</div>'; return; }
+  let html = '', last = '';
+  list.forEach(t => {
+    const k = dayKey(t.start);
+    if (k !== last) { html += `<div class="day">${dayLabel(k)}</div>`; last = k; }
+    html += `<div class="card trip" onclick="openDetail('${t.id}')">
+      <div><div class="t">${hm(t.start)} → ${hm(t.end)}</div><div class="sub">${dur(t.durationMin)} · 평균 ${t.avgSpeedKmh}km/h${t.batteryUsed != null ? ` · 🔋${t.batteryUsed}%` : ''}</div></div>
+      <div class="d"><div class="km">${t.distanceKm.toFixed(1)}<span class="sub"> km</span></div></div></div>`;
+  });
+  document.getElementById('list').innerHTML = html;
+}
+
+let liveTimer = null, liveFirst = true;
+
+async function openLive() {
+  liveFirst = true;
+  document.getElementById('detail').classList.add('show');
+  await refreshLive();
+  clearInterval(liveTimer);
+  liveTimer = setInterval(refreshLive, 10000);
+}
+
+async function refreshLive() {
+  const t = await fetch('api/current').then(r => r.json()).catch(() => null);
+  if (!t || !t.start) {
+    clearInterval(liveTimer); liveTimer = null;
+    document.getElementById('dtitle').textContent = '주행이 끝났어요';
+    document.getElementById('dsub').textContent = '잠시 후 목록에 기록이 나타나요';
+    setTimeout(() => { closeDetail(); load(); }, 2500);
+    return;
+  }
+  const lv = t.live || {};
+  const pts = t.points.map(p => [p[1], p[2]]);
+  const elapsed = Math.max(0, Math.round((Date.now() - t.start) / 60000));
+  let km = null;
+  if (t.startOdoKm != null && lv.odometerKm != null) km = lv.odometerKm - t.startOdoKm;
+  if (km == null || km < 0) { km = 0; for (let i = 1; i < pts.length; i++) km += distKm(pts[i-1], pts[i]); }
+  const ago = lv.updatedAt ? Math.round((Date.now() - lv.updatedAt) / 1000) : null;
+  document.getElementById('dtitle').innerHTML = `🚗 주행 중 <span class="pill live">실시간</span>`;
+  document.getElementById('dsub').textContent = `${hm(t.start)} 출발 · ${dur(elapsed)} 경과${ago != null ? ` · ${ago}초 전 갱신` : ''}`;
+  const rows = [
+    ['달린 거리', `${km.toFixed(1)} km`], ['경과 시간', dur(elapsed)],
+    ['현재 속도', lv.speedKmh != null ? `${Math.round(lv.speedKmh)} km/h` : '-'],
+    ['최고 속도', t.maxSpeedKmh ? `${Math.round(t.maxSpeedKmh)} km/h` : '-'],
+    ['배터리', t.startBattery != null && lv.battery != null ? `${Math.round(t.startBattery)}% → ${Math.round(lv.battery)}%` : '-'],
+    ['기록된 위치', `${pts.length}개`],
+  ];
+  document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
+  const fit = liveFirst; liveFirst = false;
+  if (await drawKakao(pts, { endLabel: '현재 위치', fit })) return;
+  drawLeaflet(pts, { endLabel: '현재 위치', fit });
+}
+
+function distKm(a, b) {
+  const R = 6371, r = (d) => d * Math.PI / 180;
+  const dLat = r(b[0] - a[0]), dLng = r(b[1] - a[1]);
+  const h = Math.sin(dLat/2)**2 + Math.cos(r(a[0])) * Math.cos(r(b[0])) * Math.sin(dLng/2)**2;
+  const d = 2 * R * Math.asin(Math.sqrt(h));
+  return d < 5 ? d : 0;
+}
+
+async function openDetail(id) {
+  clearInterval(liveTimer); liveTimer = null;
+  const t = await fetch(`api/trips/${id}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!t) return;
+  history.replaceState(null, '', `#trip=${id}`);
+  document.getElementById('detail').classList.add('show');
+  document.getElementById('dtitle').textContent = `${dayLabel(dayKey(t.start))} ${hm(t.start)} → ${hm(t.end)}`;
+  document.getElementById('dsub').textContent = `${t.distanceKm.toFixed(1)}km · ${dur(t.durationMin)}`;
+  const kmap = (l, n) => l ? `<a href="https://map.kakao.com/link/map/${encodeURIComponent(n)},${l.lat},${l.lng}" target="_blank">지도</a>` : '-';
+  const rows = [
+    ['거리', `${t.distanceKm.toFixed(1)} km`], ['주행 시간', dur(t.durationMin)],
+    ['평균 속도', `${t.avgSpeedKmh} km/h`], ['최고 속도', t.maxSpeedKmh ? `${t.maxSpeedKmh} km/h` : '-'],
+    ['배터리', t.startBattery != null && t.endBattery != null ? `${Math.round(t.startBattery)}% → ${Math.round(t.endBattery)}% (−${t.batteryUsed}%)` : '-'],
+    ['출발', `${hm(t.start)} · ${kmap(t.startLoc, '출발 위치')}`], ['도착', `${hm(t.end)} · ${kmap(t.endLoc, '주차 위치')}`],
+    ['기록된 위치', `${t.points.length}개`],
+  ];
+  document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
+  const pts = t.points.map(p => [p[1], p[2]]);
+  const s0 = t.startLoc || (pts[0] && { lat: pts[0][0], lng: pts[0][1] });
+  const e0 = t.endLoc || (pts.length && { lat: pts[pts.length-1][0], lng: pts[pts.length-1][1] });
+  if (s0 && e0) {
+    // 지도 앱으로 열기 (Google은 경유지 최대 8개로 경로를 비슷하게 재현)
+    const step = Math.max(1, Math.floor(pts.length / 9));
+    const way = pts.filter((_, i) => i > 0 && i < pts.length - 1 && i % step === 0).slice(0, 8).map(p => `${p[0]},${p[1]}`).join('|');
+    const g = `https://www.google.com/maps/dir/?api=1&origin=${s0.lat},${s0.lng}&destination=${e0.lat},${e0.lng}${way ? `&waypoints=${encodeURIComponent(way)}` : ''}&travelmode=driving`;
+    const k = `https://map.kakao.com/link/from/${encodeURIComponent('출발')},${s0.lat},${s0.lng}/to/${encodeURIComponent('도착')},${e0.lat},${e0.lng}`;
+    const n = `https://map.naver.com/index.nhn?slng=${s0.lng}&slat=${s0.lat}&stext=${encodeURIComponent('출발')}&elng=${e0.lng}&elat=${e0.lat}&etext=${encodeURIComponent('도착')}&menu=route&pathType=0`;
+    document.getElementById('dinfo').insertAdjacentHTML('afterbegin', `<div class="open"><a href="${k}" target="_blank">카카오맵</a><a href="${n}" target="_blank">네이버지도</a><a href="${g}" target="_blank">구글지도</a></div>`);
+  }
+  if (await drawKakao(pts)) return;
+  drawLeaflet(pts);
+}
+
+function loadKakao() {
+  if (!kakaoKey) return Promise.resolve(false);
+  if (kakaoReady) return kakaoReady;
+  kakaoReady = new Promise((resolve) => {
+    const sc = document.createElement('script');
+    sc.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${kakaoKey}&autoload=false`;
+    sc.onload = () => { try { kakao.maps.load(() => resolve(true)); } catch { resolve(false); } };
+    sc.onerror = () => resolve(false);
+    document.head.appendChild(sc);
+    setTimeout(() => resolve(false), 8000);
+  });
+  return kakaoReady;
+}
+
+async function drawKakao(pts, opt = {}) {
+  const endLabel = opt.endLabel || '도착', fit = opt.fit !== false;
+  if (!(await loadKakao()) || typeof kakao === 'undefined' || !kakao.maps?.Map) return false;
+  const el = document.getElementById('map');
+  if (!kmap) { el.innerHTML = ''; kmap = new kakao.maps.Map(el, { center: new kakao.maps.LatLng(37.5665, 126.978), level: 7 }); }
+  kshapes.forEach(o => o.setMap(null)); kshapes = [];
+  setTimeout(() => {
+    kmap.relayout();
+    if (!pts.length) return;
+    const path = pts.map(p => new kakao.maps.LatLng(p[0], p[1]));
+    kshapes.push(new kakao.maps.Polyline({ map: kmap, path, strokeWeight: 6, strokeColor: '#3e7bfa', strokeOpacity: 0.9 }));
+    const label = (pos, text, color) => new kakao.maps.CustomOverlay({ map: kmap, position: pos, yAnchor: 1.6, content: `<div class="lbl" style="border-left:4px solid ${color}">${text}</div>` });
+    kshapes.push(label(path[0], '출발', '#2ecc8f'), label(path[path.length - 1], endLabel, '#f25c5c'));
+    kshapes.push(new kakao.maps.Circle({ map: kmap, center: path[0], radius: 12, strokeWeight: 2, strokeColor: '#fff', fillColor: '#2ecc8f', fillOpacity: 1 }));
+    kshapes.push(new kakao.maps.Circle({ map: kmap, center: path[path.length - 1], radius: 12, strokeWeight: 2, strokeColor: '#fff', fillColor: '#f25c5c', fillOpacity: 1 }));
+    if (!fit) return;
+    const b = new kakao.maps.LatLngBounds(); path.forEach(p => b.extend(p));
+    path.length > 1 ? kmap.setBounds(b, 40, 40, 40, 40) : kmap.setCenter(path[0]);
+  }, 60);
+  return true;
+}
+
+function drawLeaflet(pts, opt = {}) {
+  const endLabel = opt.endLabel || '도착', fit = opt.fit !== false;
+  if (typeof L === 'undefined') {
+    document.getElementById('map').innerHTML = '<div class="empty">지도를 불러오지 못했어요 (인터넷 연결 확인)</div>';
+    return;
+  }
+  if (!map) {
+    map = L.map('map', { zoomControl: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  }
+  setTimeout(() => {
+    map.invalidateSize();
+    if (layer) layer.remove();
+    layer = L.layerGroup().addTo(map);
+    if (pts.length) {
+      const line = L.polyline(pts, { color: '#3e7bfa', weight: 5, opacity: .9 }).addTo(layer);
+      L.circleMarker(pts[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#2ecc8f', fillOpacity: 1 }).bindTooltip('출발').addTo(layer);
+      L.circleMarker(pts[pts.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#f25c5c', fillOpacity: 1 }).bindTooltip(endLabel).addTo(layer);
+      if (fit) pts.length > 1 ? map.fitBounds(line.getBounds(), { padding: [30, 30] }) : map.setView(pts[0], 16);
+    } else map.setView([37.5665, 126.978], 11);
+  }, 50);
+}
+function closeDetail() { clearInterval(liveTimer); liveTimer = null; document.getElementById('detail').classList.remove('show'); history.replaceState(null, '', location.pathname); }
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); period = b.dataset.p; render();
+});
+load();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+setInterval(() => { if (!document.getElementById('detail').classList.contains('show')) load(); }, 60000);
+</script>
+</body>
+</html>

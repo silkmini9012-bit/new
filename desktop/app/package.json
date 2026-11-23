@@ -1,0 +1,13 @@
+{
+  "name": "drivelog-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DriveLog: Tesla drive/park notifications and trip log on your own Windows PC",
+  "main": "main.js",
+  "scripts": { "start": "node main.js", "test": "node test/logic.test.js" },
+  "dependencies": {
+    "aedes": "^0.51.3",
+    "qrcode": "^1.5.4",
+    "selfsigned": "^2.4.1"
+  }
+}

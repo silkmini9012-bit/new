@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">주행 기록</string>
-    <!-- 대시보드 주소 (Tailscale 내부망 전용) -->
-    <string name="dashboard_url">https://drive-notifier.tail9b6407.ts.net:8444/</string>
-</resources>
