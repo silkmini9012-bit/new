@@ -89,7 +89,8 @@ public class MainActivity extends Activity {
 
     private void showConnect() {
         page("<h2>🚗 주행 기록</h2>"
-                + "<p class='s'>PC의 <b>DriveLog 설정</b> 화면 마지막 단계에 있는<br><b>\"앱 설치 후 이 QR로 연결\"</b>을<br>휴대폰 카메라로 찍으면 연결돼요.</p>"
+                + "<p class='s'>휴대폰에 온 <b>\"📱 주행 기록 앱 연결\"</b> 알림을 누르거나,<br>"
+                + "PC의 <b>DriveLog 설정</b> 화면 마지막 단계의<br><b>QR 코드</b>를 카메라로 찍으면 연결돼요.</p>"
                 + "<p class='s' style='margin-top:32px'>또는 주소를 직접 붙여 넣기</p>"
                 + "<input id='u' placeholder='https://drivelog.xxxx.ts.net:10000/?k=...'>"
                 + "<button onclick='DL.save(document.getElementById(\"u\").value)'>연결</button>");
