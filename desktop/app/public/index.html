@@ -73,6 +73,18 @@
   a { color:var(--accent); }
   .open { display:flex; gap:8px; margin:12px 0 4px; }
   .open a { flex:1; text-align:center; padding:10px 0; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); text-decoration:none; font-size:14px; }
+  #carsub .here { color:var(--text); }
+  #carsub .fl { display:inline-block; margin-left:4px; padding:0 6px; border-radius:6px; background:var(--accent); color:#fff; font-weight:700; font-size:12px; }
+  #carsub .fl.guess { background:transparent; color:var(--accent); border:1px dashed var(--accent); }
+  .park { padding:14px; margin-bottom:10px; }
+  .park .pt { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .park .addr { font-weight:700; font-size:15px; }
+  .park .floors { display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
+  .park .floors button { flex:1; min-width:40px; padding:9px 0; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:14px; font-weight:600; }
+  .park .floors button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .park .floors button.guess { border:1px dashed var(--accent); color:var(--accent); }
+  .park .hint { font-size:12px; color:var(--sub); margin-top:8px; }
+  .park .go { text-decoration:none; background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:6px 10px; font-size:13px; white-space:nowrap; }
   .lbl { background:#fff; color:#111; border-radius:6px; padding:2px 6px; font-size:12px; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,.3); }
 </style>
 </head>
@@ -89,6 +101,7 @@
     <button data-p="all">전체</button>
   </div>
   <div id="live"></div>
+  <div id="park"></div>
   <div class="grid">
     <div class="card stat"><div class="k">총 거리</div><div class="v" id="sKm">-</div></div>
     <div class="card stat"><div class="k">주행 횟수</div><div class="v" id="sCnt">-</div></div>
@@ -157,6 +170,8 @@ async function load() {
   document.getElementById('title').textContent = `${s.carName || '내 테슬라'} 주행 기록`;
   document.getElementById('carsub').textContent = s.vin ? `VIN ${s.vin}` : '';
   document.getElementById('live').innerHTML = cur && cur.start ? `<div class="card trip" style="margin-bottom:10px" onclick="openLive()"><div>🚗 <b>주행 중</b> <span class="pill live">${hm(cur.start)} 출발</span><div class="sub">눌러서 실시간 경로 보기</div></div><div class="d" style="font-size:22px">›</div></div>` : '';
+  carVin = s.vin ? `VIN ${s.vin}` : ''; driving = !!(cur && cur.start);
+  renderPark();
   render();
   const m = location.hash.match(/trip=(\d{8}-\d{6})/);
   if (m) openDetail(m[1]);
@@ -213,7 +228,7 @@ function renderList(list) {
     const k = dayKey(t.start);
     if (k !== last) { html += `<div class="day">${dayLabel(k)}</div>`; last = k; }
     html += `<div class="card trip" onclick="openDetail('${t.id}')">
-      <div><div class="t">${hm(t.start)} → ${hm(t.end)}</div><div class="sub">${dur(t.durationMin)} · 평균 ${t.avgSpeedKmh}km/h${t.batteryUsed != null ? ` · 🔋${t.batteryUsed}%` : ''}${t.whPerKm != null ? ` · ⚡${t.whPerKm}Wh/km` : ''}</div></div>
+      <div><div class="t">${hm(t.start)} → ${hm(t.end)}</div><div class="sub">${dur(t.durationMin)} · 평균 ${t.avgSpeedKmh}km/h${t.batteryUsed != null ? ` · 🔋${t.batteryUsed}%` : ''}${t.whPerKm != null ? ` · ⚡${t.whPerKm}Wh/km` : ''}${floorsDb()[t.id] ? ` · 🅿️${floorsDb()[t.id]}` : ''}</div></div>
       <div class="d"><div class="km">${t.distanceKm.toFixed(1)}<span class="sub"> km</span></div></div></div>`;
   });
   document.getElementById('list').innerHTML = html;
@@ -284,6 +299,7 @@ async function openDetail(id) {
     ['거리', `${t.distanceKm.toFixed(1)} km`], ['주행 시간', dur(t.durationMin)],
     ['평균 속도', `${t.avgSpeedKmh} km/h`], ['최고 속도', t.maxSpeedKmh ? `${t.maxSpeedKmh} km/h` : '-'],
     ['배터리', t.startBattery != null && t.endBattery != null ? `${Math.round(t.startBattery)}% → ${Math.round(t.endBattery)}% (−${t.batteryUsed}%)` : '-'],
+    ['주차 층', floorName(floorsDb()[t.id]) || '-'],
     ['사용 에너지', t.energyUsedKwh != null ? `${t.energyUsedKwh} kWh` : '-'],
     ['전비', t.whPerKm != null ? `${t.whPerKm} Wh/km · ${(1000 / t.whPerKm).toFixed(1)} km/kWh` : '-'],
     ['출발', `${hm(t.start)} · ${kmap(t.startLoc, '출발 위치')}`], ['도착', `${hm(t.end)} · ${kmap(t.endLoc, '주차 위치')}`],
@@ -502,12 +518,92 @@ function renderMonths() {
   if (hl && !renderMonths.scrolled) { renderMonths.scrolled = true; setTimeout(() => document.getElementById('m-' + hl)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300); }
 }
 
+// ── 현재 주차 위치 + 층 ──
+// 테슬라는 고도/층 정보를 주지 않아서, 층은 한 번 눌러 기록하고 같은 장소에 다시 주차하면 자동으로 제안함 (이 폰에 저장)
+const FLOORS = ['B4', 'B3', 'B2', 'B1', '1F', '지상'];
+let carVin = '', driving = false, addrCache = {};
+const floorName = (f) => !f ? '' : f === '지상' ? '지상' : f.startsWith('B') ? `지하 ${f.slice(1)}층` : `${parseInt(f)}층`;
+function floorsDb() { try { return JSON.parse(localStorage.getItem('floors') || '{}'); } catch { return {}; } }
+function setFloor(id, f) {
+  const db = floorsDb();
+  if (db[id] === f) delete db[id]; else db[id] = f;
+  try { localStorage.setItem('floors', JSON.stringify(db)); } catch {}
+  renderPark(); renderList(trips.filter(x => x.start >= periodStart(period)));
+}
+function lastParked() {
+  if (!trips.length) return null;
+  return trips.reduce((a, t) => (t.end > a.end ? t : a), trips[0]);
+}
+// 같은 장소(60m 이내)에 예전에 기록한 층 → 제안
+function guessFloor(t) {
+  const db = floorsDb();
+  if (!t.endLoc) return null;
+  const c = trips.filter(o => o.id !== t.id && db[o.id] && o.endLoc && distKm([o.endLoc.lat, o.endLoc.lng], [t.endLoc.lat, t.endLoc.lng]) < 0.06).sort((a, b) => b.end - a.end)[0];
+  return c ? db[c.id] : null;
+}
+async function placeName(lat, lng) {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (addrCache[key]) return addrCache[key];
+  if (!(await loadKakao()) || !kakao.maps.services) return null;
+  const ll = new kakao.maps.LatLng(lat, lng);
+  // 1순위: 60m 안의 주차장 이름(카카오 장소 '주차장' 분류) → 2순위: 건물 이름 → 3순위: 동 + 번지
+  const pk = await new Promise((res) => {
+    try {
+      new kakao.maps.services.Places().categorySearch('PK6', (r, st) => {
+        const c = st === kakao.maps.services.Status.OK && r.find(x => Number(x.distance) <= 60);
+        res(c ? c.place_name : null);
+      }, { location: ll, radius: 100, sort: kakao.maps.services.SortBy.DISTANCE });
+    } catch { res(null); }
+  });
+  const addr = await new Promise((res) => {
+    try {
+      new kakao.maps.services.Geocoder().coord2Address(lng, lat, (r, st) => {
+        if (st !== kakao.maps.services.Status.OK || !r[0]) return res(null);
+        const ra = r[0].road_address, a = r[0].address;
+        const dong = (a && a.region_3depth_name) || (ra && ra.region_3depth_name) || '';
+        if (ra && ra.building_name) return res(`${dong ? dong + ' ' : ''}${ra.building_name}`);
+        res((ra || a) ? (ra || a).address_name.split(' ').slice(-2).join(' ') : null);
+      });
+    } catch { res(null); }
+  });
+  const name = pk || addr;
+  if (name) addrCache[key] = name;
+  return name;
+}
+function sinceText(ms) {
+  const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  return m < 60 ? `${m}분째` : m < 1440 ? `${Math.floor(m / 60)}시간 ${m % 60}분째` : `${Math.floor(m / 1440)}일째`;
+}
+async function renderPark() {
+  const sub = document.getElementById('carsub'), box = document.getElementById('park');
+  const t = lastParked();
+  if (driving || !t || !t.endLoc) {
+    sub.innerHTML = `${carVin}${driving ? `${carVin ? ' · ' : ''}<span class="here">🚗 주행 중</span>` : ''}`;
+    box.innerHTML = '';
+    return;
+  }
+  const db = floorsDb(), f = db[t.id], g = f ? null : guessFloor(t);
+  const { lat, lng } = t.endLoc;
+  const draw = (name) => {
+    const place = name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<span class="here">📍 ${place}</span>${f ? `<span class="fl">${floorName(f)}</span>` : g ? `<span class="fl guess">${floorName(g)}?</span>` : ''}`;
+    box.innerHTML = `<div class="card park"><div class="pt"><div><div class="sub">🅿️ 지금 주차 위치 · ${hm(t.end)}부터 ${sinceText(t.end)}</div>
+      <div class="addr">${place}${f ? ` · ${floorName(f)}` : ''}</div></div>
+      <a class="go" href="https://map.kakao.com/link/map/${encodeURIComponent('내 차')},${lat},${lng}" target="_blank">지도</a></div>
+      <div class="floors">${FLOORS.map(x => `<button class="${x === f ? 'on' : x === g ? 'guess' : ''}" onclick="setFloor('${t.id}','${x}')">${x}</button>`).join('')}</div>
+      <div class="hint">${f ? '다시 누르면 지워져요.' : g ? `지난번 이곳에선 ${floorName(g)}에 세웠어요. 맞으면 눌러서 확정하세요.` : '주차한 층을 눌러 두면, 다음에 같은 곳에 세울 때 자동으로 알려줘요.'}</div></div>`;
+  };
+  draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
+  const name = await placeName(lat, lng);
+  if (name) draw(name);
+}
+
 function loadKakao() {
   if (!kakaoKey) return Promise.resolve(false);
   if (kakaoReady) return kakaoReady;
   kakaoReady = new Promise((resolve) => {
     const sc = document.createElement('script');
-    sc.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${kakaoKey}&autoload=false`;
+    sc.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${kakaoKey}&autoload=false&libraries=services`;
     sc.onload = () => { try { kakao.maps.load(() => resolve(true)); } catch { resolve(false); } };
     sc.onerror = () => resolve(false);
     document.head.appendChild(sc);
