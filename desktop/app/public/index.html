@@ -85,6 +85,14 @@
   .park .floors button.guess { border:1px dashed var(--accent); color:var(--accent); }
   .park .hint { font-size:12px; color:var(--sub); margin-top:8px; }
   .park .go { text-decoration:none; background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:6px 10px; font-size:13px; white-space:nowrap; }
+  #floorAsk { position:fixed; inset:0; z-index:3000; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
+  #floorAsk .fa-card { width:100%; max-width:520px; background:var(--card); border-radius:18px 18px 0 0; padding:20px 18px 26px; box-shadow:0 -6px 24px rgba(0,0,0,.4); }
+  #floorAsk .fa-tag { display:inline-block; font-size:12px; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:2px 8px; }
+  #floorAsk h3 { margin:10px 0 4px; font-size:19px; }
+  #floorAsk .fa-main { display:flex; gap:8px; margin-top:16px; }
+  #floorAsk .fa-main button { flex:1; padding:18px 0; font-size:18px; font-weight:700; border-radius:12px; border:0; background:var(--accent); color:#fff; }
+  #floorAsk .fa-more { display:flex; gap:6px; margin-top:10px; }
+  #floorAsk .fa-more button { flex:1; padding:9px 0; font-size:13px; border-radius:10px; border:1px solid var(--line); background:transparent; color:var(--sub); }
   .lbl { background:#fff; color:#111; border-radius:6px; padding:2px 6px; font-size:12px; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,.3); }
 </style>
 </head>
@@ -524,9 +532,9 @@ const FLOORS = ['B4', 'B3', 'B2', 'B1', '1F', '지상'];
 let carVin = '', driving = false, addrCache = {};
 const floorName = (f) => !f ? '' : f === '지상' ? '지상' : f.startsWith('B') ? `지하 ${f.slice(1)}층` : `${parseInt(f)}층`;
 function floorsDb() { try { return JSON.parse(localStorage.getItem('floors') || '{}'); } catch { return {}; } }
-function setFloor(id, f) {
+function setFloor(id, f, force) {
   const db = floorsDb();
-  if (db[id] === f) delete db[id]; else db[id] = f;
+  if (db[id] === f && !force) delete db[id]; else db[id] = f;
   try { localStorage.setItem('floors', JSON.stringify(db)); } catch {}
   renderPark(); renderList(trips.filter(x => x.start >= periodStart(period)));
 }
@@ -534,12 +542,91 @@ function lastParked() {
   if (!trips.length) return null;
   return trips.reduce((a, t) => (t.end > a.end ? t : a), trips[0]);
 }
-// 같은 장소(60m 이내)에 예전에 기록한 층 → 제안
-function guessFloor(t) {
+// ── 층 학습: 주차 직전 움직임(주차장 안에서 달린 거리·시간·회전량)으로 층을 구분 ──
+// 같은 주차장(80m 이내)에서 기록한 층들로 가까운 이웃(kNN) 예측. 한 개씩 빼고 맞혀 보는 방식으로 정확도를 계산해서
+// 충분히 맞히면(9회 이상, 정확도 80% 이상) 더는 묻지 않고 자동 표시.
+const LEARN = { R: 150, minN: 9, minPerFloor: 2, goodAcc: 0.8, giveUpN: 24 };
+function featDb() { try { return JSON.parse(localStorage.getItem('floorFeat') || '{}'); } catch { return {}; } }
+function metaDb() { try { return JSON.parse(localStorage.getItem('floorMeta') || '{}'); } catch { return {}; } }
+function saveMeta(m) { try { localStorage.setItem('floorMeta', JSON.stringify(m)); } catch {} }
+function featuresOf(points) {
+  if (!points || points.length < 2) return null;
+  const E = points[points.length - 1];
+  let L = 0, turn = 0, i = points.length - 1, prevB = null;
+  while (i > 0) {
+    const a = points[i - 1], b = points[i];
+    if (distKm([a[1], a[2]], [E[1], E[2]]) * 1000 > LEARN.R) break;
+    const d = distKm([a[1], a[2]], [b[1], b[2]]) * 1000;
+    L += d;
+    if (d > 3) { const br = bearing(a, b); if (prevB != null) turn += Math.abs(((br - prevB) % 360 + 540) % 360 - 180); prevB = br; }
+    i--;
+  }
+  const T = (E[0] - points[i][0]) / 1000;
+  return [L, T, turn, E[1], E[2]];
+}
+async function tripFeat(id) {
+  const fdb = featDb();
+  if (fdb[id]) return fdb[id];
+  const t = await fetch(`api/trips/${id}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  const f = t && featuresOf(t.points);
+  if (f) { fdb[id] = f; try { localStorage.setItem('floorFeat', JSON.stringify(fdb)); } catch {} }
+  return f;
+}
+const samePlace = (a, b) => a.endLoc && b.endLoc && distKm([a.endLoc.lat, a.endLoc.lng], [b.endLoc.lat, b.endLoc.lng]) < 0.08;
+function vec(f, c) { // 거리·시간·회전 + 주차 칸 위치(중심에서 m)
+  const dy = (f[3] - c[0]) * 111000, dx = (f[4] - c[1]) * 88000;
+  return [f[0], f[1], f[2], dx, dy];
+}
+function knn(train, x, sd) {
+  const d = train.map(s => ({ y: s.y, d: Math.hypot(...x.map((v, k) => (v - s.x[k]) / (sd[k] || 1))) })).sort((a, b) => a.d - b.d);
+  const k = Math.min(3, d.length), votes = {};
+  d.slice(0, k).forEach((n, i) => { votes[n.y] = (votes[n.y] || 0) + 1 / (n.d + 0.3) + (i === 0 ? 0.01 : 0); });
+  const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : null;
+}
+// 이 주차장의 학습 상태 + 대상 trip 예측
+async function floorModel(t) {
   const db = floorsDb();
-  if (!t.endLoc) return null;
-  const c = trips.filter(o => o.id !== t.id && db[o.id] && o.endLoc && distKm([o.endLoc.lat, o.endLoc.lng], [t.endLoc.lat, t.endLoc.lng]) < 0.06).sort((a, b) => b.end - a.end)[0];
-  return c ? db[c.id] : null;
+  const here = trips.filter(o => samePlace(o, t));
+  const labeled = here.filter(o => db[o.id] && o.id !== t.id);
+  const c = [t.endLoc.lat, t.endLoc.lng];
+  const samples = [];
+  for (const o of labeled) { const f = await tripFeat(o.id); if (f) samples.push({ id: o.id, y: db[o.id], x: vec(f, c) }); }
+  const n = samples.length, floors = [...new Set(samples.map(s => s.y))];
+  const counts = Object.fromEntries(floors.map(y => [y, samples.filter(s => s.y === y).length]));
+  const mean = [0, 1, 2, 3, 4].map(k => samples.reduce((a, s) => a + s.x[k], 0) / (n || 1));
+  const sd = [0, 1, 2, 3, 4].map(k => Math.sqrt(samples.reduce((a, s) => a + (s.x[k] - mean[k]) ** 2, 0) / (n || 1)) || 1);
+  let acc = null;
+  if (n >= 4 && floors.length > 1) {
+    let ok = 0; samples.forEach((s, i) => { if (knn(samples.filter((_, j) => j !== i), s.x, sd) === s.y) ok++; });
+    acc = ok / n;
+  }
+  const onlyOne = floors.length === 1 && n >= 3;                       // 늘 같은 층이면 그대로
+  const ready = onlyOne || (n >= LEARN.minN && acc >= LEARN.goodAcc && Object.values(counts).every(v => v >= LEARN.minPerFloor));
+  const hopeless = !ready && n >= LEARN.giveUpN;
+  let pred = null;
+  if (n && (ready || hopeless || n >= 4)) { const f = await tripFeat(t.id); if (f) pred = onlyOne ? floors[0] : knn(samples, vec(f, c), sd); }
+  return { n, acc, ready, hopeless, pred, counts };
+}
+
+// 주행 끝나고 앱을 열면: 아직 학습 중인 주차장이면 팝업으로 층을 물어봄
+function askFloor(t, m) {
+  const meta = metaDb();
+  if (meta['skip:' + t.id] || document.getElementById('floorAsk')) return;
+  const el = document.createElement('div'); el.id = 'floorAsk';
+  el.innerHTML = `<div class="fa-card">
+    <div class="fa-tag">📊 데이터 수집 ${m.n}/${LEARN.minN}${m.acc != null ? ` · 현재 정확도 ${Math.round(m.acc * 100)}%` : ''}</div>
+    <h3>이번엔 몇 층에 주차했나요?</h3>
+    <div class="sub">${hm(t.end)} 주차 · 충분히 모이면 더 이상 묻지 않고 자동으로 알려드려요.</div>
+    <div class="fa-main">${['B1', 'B2', 'B3'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}</div>
+    <div class="fa-more">${['B4', '1F', '지상'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}<button onclick="answerFloor('${t.id}',null)">모르겠어요</button></div>
+  </div>`;
+  document.body.appendChild(el);
+}
+function answerFloor(id, f) {
+  document.getElementById('floorAsk')?.remove();
+  if (f) setFloor(id, f, true);
+  else { const m = metaDb(); m['skip:' + id] = 1; saveMeta(m); }
 }
 async function placeName(lat, lng) {
   const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
@@ -574,7 +661,9 @@ function sinceText(ms) {
   const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
   return m < 60 ? `${m}분째` : m < 1440 ? `${Math.floor(m / 60)}시간 ${m % 60}분째` : `${Math.floor(m / 1440)}일째`;
 }
+let parkSeq = 0;
 async function renderPark() {
+  const seq = ++parkSeq;
   const sub = document.getElementById('carsub'), box = document.getElementById('park');
   const t = lastParked();
   if (driving || !t || !t.endLoc) {
@@ -582,20 +671,35 @@ async function renderPark() {
     box.innerHTML = '';
     return;
   }
-  const db = floorsDb(), f = db[t.id], g = f ? null : guessFloor(t);
   const { lat, lng } = t.endLoc;
+  let f = floorsDb()[t.id], m = null;
   const draw = (name) => {
     const place = name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<span class="here">📍 ${place}</span>${f ? `<span class="fl">${floorName(f)}</span>` : g ? `<span class="fl guess">${floorName(g)}?</span>` : ''}`;
+    const p = !f && m && m.pred ? m.pred : null;
+    const sure = p && m.ready;
+    const tag = f ? `<span class="fl">${floorName(f)}</span>` : p ? `<span class="fl ${sure ? '' : 'guess'}">${floorName(p)}${sure ? '' : '?'}</span>` : '';
+    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<span class="here">📍 ${place}</span>${tag}`;
+    let hint = '눌러서 층을 기록할 수 있어요. 다시 누르면 지워져요.';
+    if (!f && m) {
+      if (m.ready) hint = `학습 완료 — 자동으로 ${floorName(p)}(으)로 판단했어요${m.acc != null ? ` (정확도 ${Math.round(m.acc * 100)}%)` : ''}. 틀렸으면 맞는 층을 눌러 주세요.`;
+      else if (m.hopeless) hint = `기록 ${m.n}회로도 층 구분이 잘 안 돼요(정확도 ${Math.round((m.acc || 0) * 100)}%). 지금 위치 기록 간격(10초)으로는 층 차이가 잘 안 잡혀서 더는 묻지 않을게요.`;
+      else if (p) hint = `학습 중 ${m.n}/${LEARN.minN} — 예상은 ${floorName(p)}${m.acc != null ? ` (현재 정확도 ${Math.round(m.acc * 100)}%)` : ''}`;
+      else hint = `층 학습용 데이터 수집 중 ${m.n}/${LEARN.minN}`;
+    } else if (f && m) hint = `기록됨 · 이 주차장 학습 ${m.n + 1}회${m.ready ? ' (학습 완료)' : ''}. 다시 누르면 지워져요.`;
     box.innerHTML = `<div class="card park"><div class="pt"><div><div class="sub">🅿️ 지금 주차 위치 · ${hm(t.end)}부터 ${sinceText(t.end)}</div>
-      <div class="addr">${place}${f ? ` · ${floorName(f)}` : ''}</div></div>
+      <div class="addr">${place}${f ? ` · ${floorName(f)}` : p && sure ? ` · ${floorName(p)}` : ''}</div></div>
       <a class="go" href="https://map.kakao.com/link/map/${encodeURIComponent('내 차')},${lat},${lng}" target="_blank">지도</a></div>
-      <div class="floors">${FLOORS.map(x => `<button class="${x === f ? 'on' : x === g ? 'guess' : ''}" onclick="setFloor('${t.id}','${x}')">${x}</button>`).join('')}</div>
-      <div class="hint">${f ? '다시 누르면 지워져요.' : g ? `지난번 이곳에선 ${floorName(g)}에 세웠어요. 맞으면 눌러서 확정하세요.` : '주차한 층을 눌러 두면, 다음에 같은 곳에 세울 때 자동으로 알려줘요.'}</div></div>`;
+      <div class="floors">${FLOORS.map(x => `<button class="${x === f ? 'on' : !f && x === p ? (sure ? 'on' : 'guess') : ''}" onclick="setFloor('${t.id}','${x}')">${x}</button>`).join('')}</div>
+      <div class="hint">${hint}</div></div>`;
   };
   draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
+  m = await floorModel(t).catch(() => null);
+  if (seq !== parkSeq) return;
+  draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
+  // 주차 후 12시간 안이고, 아직 층을 안 정했고, 이 주차장 학습이 끝나지 않았으면 팝업
+  if (!f && m && !m.ready && !m.hopeless && Date.now() - t.end < 12 * 3600e3) askFloor(t, m);
   const name = await placeName(lat, lng);
-  if (name) draw(name);
+  if (name && seq === parkSeq) draw(name);
 }
 
 function loadKakao() {
