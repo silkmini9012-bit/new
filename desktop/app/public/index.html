@@ -73,7 +73,8 @@
   a { color:var(--accent); }
   .open { display:flex; gap:8px; margin:12px 0 4px; }
   .open a { flex:1; text-align:center; padding:10px 0; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); text-decoration:none; font-size:14px; }
-  #carsub .here { color:var(--text); }
+  #carsub .here { color:var(--text); text-decoration:none; }
+  #carsub .fl { cursor:pointer; }
   #carsub .fl { display:inline-block; margin-left:4px; padding:0 6px; border-radius:6px; background:var(--accent); color:#fff; font-weight:700; font-size:12px; }
   #carsub .fl.guess { background:transparent; color:var(--accent); border:1px dashed var(--accent); }
   .park { padding:14px; margin-bottom:10px; }
@@ -179,6 +180,11 @@ async function load() {
   document.getElementById('carsub').textContent = s.vin ? `VIN ${s.vin}` : '';
   document.getElementById('live').innerHTML = cur && cur.start ? `<div class="card trip" style="margin-bottom:10px" onclick="openLive()"><div>🚗 <b>주행 중</b> <span class="pill live">${hm(cur.start)} 출발</span><div class="sub">눌러서 실시간 경로 보기</div></div><div class="d" style="font-size:22px">›</div></div>` : '';
   carVin = s.vin ? `VIN ${s.vin}` : ''; driving = !!(cur && cur.start);
+  clearInterval(load.poll);
+  if (driving) load.poll = setInterval(async () => {             // 주행 중 앱을 켜 두면, 주행이 끝나는 순간 목록 갱신 + 층 팝업
+    const c = await fetch('api/current').then(r => r.json()).catch(() => undefined);
+    if (c === null || (c && !c.start)) { clearInterval(load.poll); load(); }
+  }, 20000);
   renderPark();
   render();
   const m = location.hash.match(/trip=(\d{8}-\d{6})/);
@@ -610,18 +616,24 @@ async function floorModel(t) {
 }
 
 // 주행 끝나고 앱을 열면: 아직 학습 중인 주차장이면 팝업으로 층을 물어봄
-function askFloor(t, m) {
+function askFloor(t, m, fix) {
   const meta = metaDb();
-  if (meta['skip:' + t.id] || document.getElementById('floorAsk')) return;
+  if ((!fix && meta['skip:' + t.id]) || document.getElementById('floorAsk')) return;
   const el = document.createElement('div'); el.id = 'floorAsk';
   el.innerHTML = `<div class="fa-card">
-    <div class="fa-tag">📊 데이터 수집 ${m.n}/${LEARN.minN}${m.acc != null ? ` · 현재 정확도 ${Math.round(m.acc * 100)}%` : ''}</div>
+    <div class="fa-tag">${fix ? '✏️ 주차 층 고치기' : `📊 데이터 수집 ${m.n}/${LEARN.minN}`}${m.acc != null ? ` · 현재 정확도 ${Math.round(m.acc * 100)}%` : ''}</div>
     <h3>이번엔 몇 층에 주차했나요?</h3>
     <div class="sub">${hm(t.end)} 주차 · 충분히 모이면 더 이상 묻지 않고 자동으로 알려드려요.</div>
     <div class="fa-main">${['B1', 'B2', 'B3'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}</div>
-    <div class="fa-more">${['B4', '1F', '지상'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}<button onclick="answerFloor('${t.id}',null)">모르겠어요</button></div>
+    <div class="fa-more">${['B4', '1F', '지상'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}<button onclick="answerFloor('${t.id}',null)">${fix ? '닫기' : '모르겠어요'}</button></div>
   </div>`;
   document.body.appendChild(el);
+}
+async function reaskFloor() {
+  const t = lastParked(); if (!t) return;
+  const m = await floorModel(t).catch(() => ({ n: 0, acc: null }));
+  const meta = metaDb(); delete meta['skip:' + t.id]; saveMeta(meta);
+  askFloor(t, m, true);
 }
 function answerFloor(id, f) {
   document.getElementById('floorAsk')?.remove();
@@ -673,24 +685,13 @@ async function renderPark() {
   }
   const { lat, lng } = t.endLoc;
   let f = floorsDb()[t.id], m = null;
+  // 메인 화면엔 위치와 층만 표시 (입력은 주행 끝난 뒤 팝업으로만). 층 표시를 누르면 팝업을 다시 열어 고칠 수 있음
+  box.innerHTML = '';
   const draw = (name) => {
     const place = name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    const p = !f && m && m.pred ? m.pred : null;
-    const sure = p && m.ready;
-    const tag = f ? `<span class="fl">${floorName(f)}</span>` : p ? `<span class="fl ${sure ? '' : 'guess'}">${floorName(p)}${sure ? '' : '?'}</span>` : '';
-    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<span class="here">📍 ${place}</span>${tag}`;
-    let hint = '눌러서 층을 기록할 수 있어요. 다시 누르면 지워져요.';
-    if (!f && m) {
-      if (m.ready) hint = `학습 완료 — 자동으로 ${floorName(p)}(으)로 판단했어요${m.acc != null ? ` (정확도 ${Math.round(m.acc * 100)}%)` : ''}. 틀렸으면 맞는 층을 눌러 주세요.`;
-      else if (m.hopeless) hint = `기록 ${m.n}회로도 층 구분이 잘 안 돼요(정확도 ${Math.round((m.acc || 0) * 100)}%). 지금 위치 기록 간격(10초)으로는 층 차이가 잘 안 잡혀서 더는 묻지 않을게요.`;
-      else if (p) hint = `학습 중 ${m.n}/${LEARN.minN} — 예상은 ${floorName(p)}${m.acc != null ? ` (현재 정확도 ${Math.round(m.acc * 100)}%)` : ''}`;
-      else hint = `층 학습용 데이터 수집 중 ${m.n}/${LEARN.minN}`;
-    } else if (f && m) hint = `기록됨 · 이 주차장 학습 ${m.n + 1}회${m.ready ? ' (학습 완료)' : ''}. 다시 누르면 지워져요.`;
-    box.innerHTML = `<div class="card park"><div class="pt"><div><div class="sub">🅿️ 지금 주차 위치 · ${hm(t.end)}부터 ${sinceText(t.end)}</div>
-      <div class="addr">${place}${f ? ` · ${floorName(f)}` : p && sure ? ` · ${floorName(p)}` : ''}</div></div>
-      <a class="go" href="https://map.kakao.com/link/map/${encodeURIComponent('내 차')},${lat},${lng}" target="_blank">지도</a></div>
-      <div class="floors">${FLOORS.map(x => `<button class="${x === f ? 'on' : !f && x === p ? (sure ? 'on' : 'guess') : ''}" onclick="setFloor('${t.id}','${x}')">${x}</button>`).join('')}</div>
-      <div class="hint">${hint}</div></div>`;
+    const p = !f && m && m.pred && m.ready ? m.pred : null;
+    const tag = f || p ? `<span class="fl" onclick="reaskFloor()">${floorName(f || p)}</span>` : '';
+    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<a class="here" href="https://map.kakao.com/link/map/${encodeURIComponent('내 차')},${lat},${lng}" target="_blank">📍 ${place}</a>${tag}`;
   };
   draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
   m = await floorModel(t).catch(() => null);
