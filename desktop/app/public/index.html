@@ -86,6 +86,7 @@
   .park .floors button.guess { border:1px dashed var(--accent); color:var(--accent); }
   .park .hint { font-size:12px; color:var(--sub); margin-top:8px; }
   .park .go { text-decoration:none; background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:6px 10px; font-size:13px; white-space:nowrap; }
+  .placebtn { display:block; width:100%; margin-top:14px; padding:12px; border-radius:10px; border:1px dashed var(--accent); background:transparent; color:var(--accent); font-size:14px; font-weight:600; }
   #floorAsk { position:fixed; inset:0; z-index:3000; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
   #floorAsk .fa-card { width:100%; max-width:520px; background:var(--card); border-radius:18px 18px 0 0; padding:20px 18px 26px; box-shadow:0 -6px 24px rgba(0,0,0,.4); }
   #floorAsk .fa-tag { display:inline-block; font-size:12px; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:2px 8px; }
@@ -313,13 +314,18 @@ async function openDetail(id) {
     ['거리', `${t.distanceKm.toFixed(1)} km`], ['주행 시간', dur(t.durationMin)],
     ['평균 속도', `${t.avgSpeedKmh} km/h`], ['최고 속도', t.maxSpeedKmh ? `${t.maxSpeedKmh} km/h` : '-'],
     ['배터리', t.startBattery != null && t.endBattery != null ? `${Math.round(t.startBattery)}% → ${Math.round(t.endBattery)}% (−${t.batteryUsed}%)` : '-'],
-    ['주차 층', floorName(floorsDb()[t.id]) || '-'],
     ['사용 에너지', t.energyUsedKwh != null ? `${t.energyUsedKwh} kWh` : '-'],
     ['전비', t.whPerKm != null ? `${t.whPerKm} Wh/km · ${(1000 / t.whPerKm).toFixed(1)} km/kWh` : '-'],
     ['출발', `${hm(t.start)} · ${kmap(t.startLoc, '출발 위치')}`], ['도착', `${hm(t.end)} · ${kmap(t.endLoc, '주차 위치')}`],
     ['기록된 위치', `${t.points.length}개`],
   ];
-  document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
+  const place = placeOf(t.endLoc);
+  if (place) {
+    const laps = lapsOf(t.points, place);
+    rows.splice(5, 0, ['주차 층', `${floorName(floorsDb()[t.id]) || '-'}${laps != null ? ` · 램프 ${laps}바퀴` : ''}`]);
+  }
+  document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')
+    + (t.endLoc ? `<button class="placebtn" onclick="togglePlace(${t.endLoc.lat},${t.endLoc.lng}, addrCache['${t.endLoc.lat.toFixed(4)},${t.endLoc.lng.toFixed(4)}'] || '')">${place ? '🅿️ 이 주차장 층 기록 끄기' : '🅿️ 이 주차 위치를 층 기록 장소로 지정'}</button>` : '');
   const pts = t.points.map(p => [p[1], p[2]]);
   const s0 = t.startLoc || (pts[0] && { lat: pts[0][0], lng: pts[0][1] });
   const e0 = t.endLoc || (pts.length && { lat: pts[pts.length-1][0], lng: pts[pts.length-1][1] });
@@ -533,112 +539,106 @@ function renderMonths() {
 }
 
 // ── 현재 주차 위치 + 층 ──
-// 테슬라는 고도/층 정보를 주지 않아서, 층은 한 번 눌러 기록하고 같은 장소에 다시 주차하면 자동으로 제안함 (이 폰에 저장)
+// 테슬라는 고도/층 정보를 안 줘서, '층 기록 장소'로 지정한 주차장에서만 램프를 몇 바퀴 돌았는지로 층을 판단함.
+// 바퀴 수 → 층 대응표는 내가 알려준 답으로 쌓이고, 처음 보는 바퀴 수면 주차 후 한 번 물어봄. (모두 이 폰에 저장)
 const FLOORS = ['B4', 'B3', 'B2', 'B1', '1F', '지상'];
+const ZONE_M = 100, PLACE_M = 80, LAP_TOL = 0.4, LAP_GAP = 0.25;
 let carVin = '', driving = false, addrCache = {};
 const floorName = (f) => !f ? '' : f === '지상' ? '지상' : f.startsWith('B') ? `지하 ${f.slice(1)}층` : `${parseInt(f)}층`;
-function floorsDb() { try { return JSON.parse(localStorage.getItem('floors') || '{}'); } catch { return {}; } }
-function setFloor(id, f, force) {
-  const db = floorsDb();
-  if (db[id] === f && !force) delete db[id]; else db[id] = f;
-  try { localStorage.setItem('floors', JSON.stringify(db)); } catch {}
-  renderPark(); renderList(trips.filter(x => x.start >= periodStart(period)));
-}
+const ls = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || JSON.stringify(d)); } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+function floorsDb() { return ls('floors', {}); }
+function placesDb() { return ls('parkPlaces', []); }                 // [{id, lat, lng, name}]
+function samplesDb() { return ls('lapSamples', {}); }                // {placeId: [{trip, laps, floor}]}
+function metaDb() { return ls('floorMeta', {}); }
 function lastParked() {
   if (!trips.length) return null;
   return trips.reduce((a, t) => (t.end > a.end ? t : a), trips[0]);
 }
-// ── 층 학습: 주차 직전 움직임(주차장 안에서 달린 거리·시간·회전량)으로 층을 구분 ──
-// 같은 주차장(80m 이내)에서 기록한 층들로 가까운 이웃(kNN) 예측. 한 개씩 빼고 맞혀 보는 방식으로 정확도를 계산해서
-// 충분히 맞히면(9회 이상, 정확도 80% 이상) 더는 묻지 않고 자동 표시.
-const LEARN = { R: 150, minN: 9, minPerFloor: 2, goodAcc: 0.8, giveUpN: 24 };
-function featDb() { try { return JSON.parse(localStorage.getItem('floorFeat') || '{}'); } catch { return {}; } }
-function metaDb() { try { return JSON.parse(localStorage.getItem('floorMeta') || '{}'); } catch { return {}; } }
-function saveMeta(m) { try { localStorage.setItem('floorMeta', JSON.stringify(m)); } catch {} }
-function featuresOf(points) {
-  if (!points || points.length < 2) return null;
-  const E = points[points.length - 1];
-  let L = 0, turn = 0, i = points.length - 1, prevB = null;
-  while (i > 0) {
-    const a = points[i - 1], b = points[i];
-    if (distKm([a[1], a[2]], [E[1], E[2]]) * 1000 > LEARN.R) break;
-    const d = distKm([a[1], a[2]], [b[1], b[2]]) * 1000;
-    L += d;
-    if (d > 3) { const br = bearing(a, b); if (prevB != null) turn += Math.abs(((br - prevB) % 360 + 540) % 360 - 180); prevB = br; }
-    i--;
+function geoM(a0, a1, b0, b1) {   // 거리(m), 상한 없음
+  const R = 6371000, r = (d) => d * Math.PI / 180, dLat = r(b0 - a0), dLng = r(b1 - a1);
+  return 2 * R * Math.asin(Math.sqrt(Math.sin(dLat/2)**2 + Math.cos(r(a0)) * Math.cos(r(b0)) * Math.sin(dLng/2)**2));
+}
+const mDist = (a, b) => geoM(a.lat, a.lng, b.lat, b.lng);
+function placeOf(loc) { return loc ? placesDb().find(pl => mDist(pl, loc) <= PLACE_M) || null : null; }
+// 주차장 반경 안에 마지막으로 들어온 뒤부터 주차까지, 한 방향으로 돈 각도 합 ÷ 360
+function lapsOf(points, center) {
+  if (!points || points.length < 3) return null;
+  const c = [0, center.lat, center.lng];
+  let i = points.length - 1;
+  while (i > 0 && geoM(points[i-1][1], points[i-1][2], c[1], c[2]) <= ZONE_M) i--;
+  let tot = 0, pb = null;
+  for (let k = i + 1; k < points.length; k++) {
+    const a = points[k-1], b = points[k];
+    if (geoM(a[1], a[2], b[1], b[2]) <= 3) continue;
+    const br = bearing(a, b);
+    if (pb != null) tot += ((br - pb) % 360 + 540) % 360 - 180;
+    pb = br;
   }
-  const T = (E[0] - points[i][0]) / 1000;
-  return [L, T, turn, E[1], E[2]];
+  return Math.round(Math.abs(tot) / 36) / 10;
 }
-async function tripFeat(id) {
-  const fdb = featDb();
-  if (fdb[id]) return fdb[id];
-  const t = await fetch(`api/trips/${id}`).then(r => r.ok ? r.json() : null).catch(() => null);
-  const f = t && featuresOf(t.points);
-  if (f) { fdb[id] = f; try { localStorage.setItem('floorFeat', JSON.stringify(fdb)); } catch {} }
-  return f;
+async function tripLaps(t, place) {
+  const cache = ls('lapCache', {});
+  const key = `${t.id}@${place.id}`;
+  if (cache[key] != null) return cache[key];
+  const full = t.points ? t : await fetch(`api/trips/${t.id}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  const v = full && lapsOf(full.points, place);
+  if (v != null) { cache[key] = v; lsSet('lapCache', cache); }
+  return v;
 }
-const samePlace = (a, b) => a.endLoc && b.endLoc && distKm([a.endLoc.lat, a.endLoc.lng], [b.endLoc.lat, b.endLoc.lng]) < 0.08;
-function vec(f, c) { // 거리·시간·회전 + 주차 칸 위치(중심에서 m)
-  const dy = (f[3] - c[0]) * 111000, dx = (f[4] - c[1]) * 88000;
-  return [f[0], f[1], f[2], dx, dy];
+// 대응표에서 판단: 가장 가까운 층이 0.4바퀴 안이고, 다른 층보다 확실히 가까울 때만
+function floorFromLaps(placeId, laps) {
+  const sm = (samplesDb()[placeId] || []);
+  const best = {};
+  sm.forEach(x => { const d = Math.abs(x.laps - laps); if (best[x.floor] == null || d < best[x.floor]) best[x.floor] = d; });
+  const r = Object.entries(best).sort((a, b) => a[1] - b[1]);
+  if (!r.length || r[0][1] > LAP_TOL) return null;
+  if (r[1] && r[1][1] - r[0][1] < LAP_GAP) return null;
+  return r[0][0];
 }
-function knn(train, x, sd) {
-  const d = train.map(s => ({ y: s.y, d: Math.hypot(...x.map((v, k) => (v - s.x[k]) / (sd[k] || 1))) })).sort((a, b) => a.d - b.d);
-  const k = Math.min(3, d.length), votes = {};
-  d.slice(0, k).forEach((n, i) => { votes[n.y] = (votes[n.y] || 0) + 1 / (n.d + 0.3) + (i === 0 ? 0.01 : 0); });
-  const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
-  return best ? best[0] : null;
+function saveAnswer(t, place, laps, f) {
+  const db = floorsDb(); db[t.id] = f; lsSet('floors', db);
+  const sm = samplesDb(); const arr = (sm[place.id] || []).filter(x => x.trip !== t.id);
+  if (laps != null) arr.push({ trip: t.id, laps, floor: f });
+  sm[place.id] = arr; lsSet('lapSamples', sm);
 }
-// 이 주차장의 학습 상태 + 대상 trip 예측
-async function floorModel(t) {
-  const db = floorsDb();
-  const here = trips.filter(o => samePlace(o, t));
-  const labeled = here.filter(o => db[o.id] && o.id !== t.id);
-  const c = [t.endLoc.lat, t.endLoc.lng];
-  const samples = [];
-  for (const o of labeled) { const f = await tripFeat(o.id); if (f) samples.push({ id: o.id, y: db[o.id], x: vec(f, c) }); }
-  const n = samples.length, floors = [...new Set(samples.map(s => s.y))];
-  const counts = Object.fromEntries(floors.map(y => [y, samples.filter(s => s.y === y).length]));
-  const mean = [0, 1, 2, 3, 4].map(k => samples.reduce((a, s) => a + s.x[k], 0) / (n || 1));
-  const sd = [0, 1, 2, 3, 4].map(k => Math.sqrt(samples.reduce((a, s) => a + (s.x[k] - mean[k]) ** 2, 0) / (n || 1)) || 1);
-  let acc = null;
-  if (n >= 4 && floors.length > 1) {
-    let ok = 0; samples.forEach((s, i) => { if (knn(samples.filter((_, j) => j !== i), s.x, sd) === s.y) ok++; });
-    acc = ok / n;
+function togglePlace(lat, lng, name) {
+  const pl = placesDb(), hit = pl.find(x => mDist(x, { lat, lng }) <= PLACE_M);
+  if (hit) {
+    if (!confirm(`'${hit.name || '이 장소'}'의 층 기록을 끌까요? (지금까지 배운 바퀴 수 기록은 남아 있어요)`)) return;
+    lsSet('parkPlaces', pl.filter(x => x !== hit));
+  } else {
+    pl.push({ id: `p${Date.now()}`, lat, lng, name: name || '' }); lsSet('parkPlaces', pl);
   }
-  const onlyOne = floors.length === 1 && n >= 3;                       // 늘 같은 층이면 그대로
-  const ready = onlyOne || (n >= LEARN.minN && acc >= LEARN.goodAcc && Object.values(counts).every(v => v >= LEARN.minPerFloor));
-  const hopeless = !ready && n >= LEARN.giveUpN;
-  let pred = null;
-  if (n && (ready || hopeless || n >= 4)) { const f = await tripFeat(t.id); if (f) pred = onlyOne ? floors[0] : knn(samples, vec(f, c), sd); }
-  return { n, acc, ready, hopeless, pred, counts };
+  closeDetail(); renderPark();
 }
 
-// 주행 끝나고 앱을 열면: 아직 학습 중인 주차장이면 팝업으로 층을 물어봄
-function askFloor(t, m, fix) {
+// 주차 후 팝업: 지정 장소에서 처음 보는 바퀴 수일 때만
+function askFloor(t, place, laps, fix) {
+  if (document.getElementById('floorAsk')) return;
   const meta = metaDb();
-  if ((!fix && meta['skip:' + t.id]) || document.getElementById('floorAsk')) return;
+  if (!fix && meta['skip:' + t.id]) return;
+  window._ask = { t, place, laps };
   const el = document.createElement('div'); el.id = 'floorAsk';
   el.innerHTML = `<div class="fa-card">
-    <div class="fa-tag">${fix ? '✏️ 주차 층 고치기' : `📊 데이터 수집 ${m.n}/${LEARN.minN}`}${m.acc != null ? ` · 현재 정확도 ${Math.round(m.acc * 100)}%` : ''}</div>
-    <h3>이번엔 몇 층에 주차했나요?</h3>
-    <div class="sub">${hm(t.end)} 주차 · 충분히 모이면 더 이상 묻지 않고 자동으로 알려드려요.</div>
-    <div class="fa-main">${['B1', 'B2', 'B3'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}</div>
-    <div class="fa-more">${['B4', '1F', '지상'].map(x => `<button onclick="answerFloor('${t.id}','${x}')">${floorName(x)}</button>`).join('')}<button onclick="answerFloor('${t.id}',null)">${fix ? '닫기' : '모르겠어요'}</button></div>
+    <div class="fa-tag">${fix ? '✏️ 주차 층 고치기' : '🅿️ ' + (place.name || '층 기록 장소')}</div>
+    <h3>몇 층에 주차했나요?</h3>
+    <div class="sub">${laps != null ? `주차장에서 <b>${laps}바퀴</b> 돌았어요. 알려주시면 다음부터 이만큼 돌면 그 층으로 저장할게요.` : '이번엔 바퀴 수를 못 쟀어요.'}</div>
+    <div class="fa-main">${['B1', 'B2', 'B3'].map(x => `<button onclick="answerFloor('${x}')">${floorName(x)}</button>`).join('')}</div>
+    <div class="fa-more">${['B4', '1F', '지상'].map(x => `<button onclick="answerFloor('${x}')">${floorName(x)}</button>`).join('')}<button onclick="answerFloor(null)">${fix ? '닫기' : '모르겠어요'}</button></div>
   </div>`;
   document.body.appendChild(el);
 }
-async function reaskFloor() {
-  const t = lastParked(); if (!t) return;
-  const m = await floorModel(t).catch(() => ({ n: 0, acc: null }));
-  const meta = metaDb(); delete meta['skip:' + t.id]; saveMeta(meta);
-  askFloor(t, m, true);
-}
-function answerFloor(id, f) {
+function answerFloor(f) {
   document.getElementById('floorAsk')?.remove();
-  if (f) setFloor(id, f, true);
-  else { const m = metaDb(); m['skip:' + id] = 1; saveMeta(m); }
+  const a = window._ask; if (!a) return;
+  if (f) saveAnswer(a.t, a.place, a.laps, f);
+  else { const m = metaDb(); m['skip:' + a.t.id] = 1; lsSet('floorMeta', m); }
+  renderPark(); renderList(trips.filter(x => x.start >= periodStart(period)));
+}
+async function reaskFloor() {
+  const t = lastParked(); const place = t && placeOf(t.endLoc); if (!place) return;
+  askFloor(t, place, await tripLaps(t, place), true);
 }
 async function placeName(lat, lng) {
   const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
@@ -684,21 +684,23 @@ async function renderPark() {
     return;
   }
   const { lat, lng } = t.endLoc;
-  let f = floorsDb()[t.id], m = null;
-  // 메인 화면엔 위치와 층만 표시 (입력은 주행 끝난 뒤 팝업으로만). 층 표시를 누르면 팝업을 다시 열어 고칠 수 있음
   box.innerHTML = '';
+  const place = placeOf(t.endLoc);
+  let f = place ? floorsDb()[t.id] : null;
   const draw = (name) => {
-    const place = name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    const p = !f && m && m.pred && m.ready ? m.pred : null;
-    const tag = f || p ? `<span class="fl" onclick="reaskFloor()">${floorName(f || p)}</span>` : '';
-    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<a class="here" href="https://map.kakao.com/link/map/${encodeURIComponent('내 차')},${lat},${lng}" target="_blank">📍 ${place}</a>${tag}`;
+    const nm = name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const tag = f ? `<span class="fl" onclick="reaskFloor()">${floorName(f)}</span>` : '';
+    sub.innerHTML = `${carVin ? carVin + ' · ' : ''}<a class="here" href="https://map.kakao.com/link/map/${encodeURIComponent('내 차')},${lat},${lng}" target="_blank">📍 ${nm}</a>${tag}`;
   };
   draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
-  m = await floorModel(t).catch(() => null);
-  if (seq !== parkSeq) return;
-  draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
-  // 주차 후 12시간 안이고, 아직 층을 안 정했고, 이 주차장 학습이 끝나지 않았으면 팝업
-  if (!f && m && !m.ready && !m.hopeless && Date.now() - t.end < 12 * 3600e3) askFloor(t, m);
+  if (place && !f) {
+    const laps = await tripLaps(t, place);
+    if (seq !== parkSeq) return;
+    const auto = laps != null ? floorFromLaps(place.id, laps) : null;
+    if (auto) { const db = floorsDb(); db[t.id] = auto; lsSet('floors', db); f = auto; }       // 대응표로 자동 저장
+    else if (Date.now() - t.end < 12 * 3600e3) askFloor(t, place, laps);                      // 처음 보는 바퀴 수 → 물어봄
+    draw(addrCache[`${lat.toFixed(4)},${lng.toFixed(4)}`]);
+  }
   const name = await placeName(lat, lng);
   if (name && seq === parkSeq) draw(name);
 }
