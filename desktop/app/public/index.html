@@ -29,7 +29,10 @@
   .stat .k { color:var(--sub); font-size:12px; margin-bottom:2px; }
   h2 { font-size:15px; margin:22px 4px 8px; color:var(--sub); font-weight:600; }
   .chart svg { width:100%; height:150px; display:block; }
-  .day { margin:16px 4px 6px; font-size:13px; color:var(--sub); font-weight:600; }
+  .day { margin:16px 4px 6px; font-size:13px; color:var(--sub); font-weight:600; display:flex; justify-content:space-between; align-items:center; }
+  .dayplay { background:transparent; border:1px solid var(--line); color:var(--accent); border-radius:99px; padding:4px 10px; font-size:12px; font-weight:600; }
+  .daybtn { display:block; width:100%; margin-top:14px; padding:12px; border-radius:10px; border:0; background:var(--accent); color:#fff; font-size:14px; font-weight:600; }
+  .row.go { cursor:pointer; }
   .trip { display:flex; align-items:center; gap:12px; padding:12px 14px; margin-bottom:8px; cursor:pointer; }
   .trip .t { font-weight:600; }
   .trip .d { margin-left:auto; text-align:right; }
@@ -190,6 +193,8 @@ async function load() {
   render();
   const m = location.hash.match(/trip=(\d{8}-\d{6})/);
   if (m) openDetail(m[1]);
+  const dm = location.hash.match(/day=(\d{4}-\d{2}-\d{2})/);
+  if (dm) openDay(dm[1]);
 }
 
 function render() {
@@ -241,7 +246,7 @@ function renderList(list) {
   let html = '', last = '';
   list.forEach(t => {
     const k = dayKey(t.start);
-    if (k !== last) { html += `<div class="day">${dayLabel(k)}</div>`; last = k; }
+    if (k !== last) { html += `<div class="day"><span>${dayLabel(k)}</span><button class="dayplay" onclick="openDay('${k}')">▶ 하루 경로 재생</button></div>`; last = k; }
     html += `<div class="card trip" onclick="openDetail('${t.id}')">
       <div><div class="t">${hm(t.start)} → ${hm(t.end)}</div><div class="sub">${dur(t.durationMin)} · 평균 ${t.avgSpeedKmh}km/h${t.batteryUsed != null ? ` · 🔋${t.batteryUsed}%` : ''}${t.whPerKm != null ? ` · ⚡${t.whPerKm}Wh/km` : ''}${floorsDb()[t.id] ? ` · 🅿️${floorsDb()[t.id]}` : ''}</div></div>
       <div class="d"><div class="km">${t.distanceKm.toFixed(1)}<span class="sub"> km</span></div></div></div>`;
@@ -325,6 +330,7 @@ async function openDetail(id) {
     rows.splice(5, 0, ['주차 층', `${floorName(floorsDb()[t.id]) || '-'}${laps != null ? ` · 램프 ${laps}바퀴` : ''}`]);
   }
   document.getElementById('dinfo').innerHTML = rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')
+    + `<button class="daybtn" onclick="openDay('${dayKey(t.start)}')">📅 이 날 전체 경로 재생</button>`
     + (t.endLoc ? `<button class="placebtn" onclick="togglePlace(${t.endLoc.lat},${t.endLoc.lng}, addrCache['${t.endLoc.lat.toFixed(4)},${t.endLoc.lng.toFixed(4)}'] || '')">${place ? '🅿️ 이 주차장 층 기록 끄기' : '🅿️ 이 주차 위치를 층 기록 장소로 지정'}</button>` : '');
   const pts = t.points.map(p => [p[1], p[2]]);
   const s0 = t.startLoc || (pts[0] && { lat: pts[0][0], lng: pts[0][1] });
@@ -343,6 +349,35 @@ async function openDetail(id) {
   setTimeout(() => rpInit(t.points, t.distanceKm), 120);
 }
 
+// ── 하루 전체 경로 ──
+// 그날 주행들을 시간순으로 이어 붙여 한 번에 재생. 주차해 있던 시간은 3초로 줄여서 건너뜀
+const DAY_GAP_MS = 3000;
+async function openDay(k) {
+  clearInterval(liveTimer); liveTimer = null;
+  const list = trips.filter(t => dayKey(t.start) === k).sort((a, b) => a.start - b.start);
+  if (!list.length) return;
+  const full = (await Promise.all(list.map(t => fetch(`api/trips/${t.id}`).then(r => r.ok ? r.json() : null).catch(() => null)))).filter(t => t && t.points && t.points.length > 1);
+  if (!full.length) return;
+  const raw = [], realT = [];
+  let off = 0, lastV = null;
+  full.forEach(t => {
+    const first = t.points[0][0];
+    if (lastV != null) off = lastV + DAY_GAP_MS - first;
+    t.points.forEach(q => { raw.push([q[0] + off, q[1], q[2], q[3]]); realT.push(q[0]); });
+    lastV = raw[raw.length - 1][0];
+  });
+  pushDetail(`#day=${k}`);
+  document.getElementById('detail').classList.add('show');
+  const km = full.reduce((a, t) => a + (t.distanceKm || 0), 0), min = full.reduce((a, t) => a + (t.durationMin || 0), 0);
+  document.getElementById('dtitle').textContent = `${dayLabel(k)} 하루 전체`;
+  document.getElementById('dsub').textContent = `${full.length}회 · ${km.toFixed(1)}km · ${dur(min)}`;
+  document.getElementById('dinfo').innerHTML = full.map((t, i) => `<div class="row go" onclick="openDetail('${t.id}')"><span>${i + 1}. ${hm(t.start)} → ${hm(t.end)}</span><span>${t.distanceKm.toFixed(1)} km · ${dur(t.durationMin)} ›</span></div>`).join('');
+  const pts = raw.map(q => [q[1], q[2]]);
+  if (await drawKakao(pts, { raw })) mapKind = 'kakao';
+  else { drawLeaflet(pts, { raw }); mapKind = 'leaflet'; }
+  setTimeout(() => rpInit(raw, km, realT), 120);
+}
+
 // ── 경로 다시보기 ──
 // ×1 = 실제 주행 10초를 1초에 재생, ×n = n배 더 빠르게. 5초 이동 = 현재 배속의 재생 화면 기준 5초
 const RP_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50, 100];
@@ -353,7 +388,7 @@ function rpRemoveMarker() {
   if (rpMarker) { try { mapKind === 'kakao' ? rpMarker.setMap(null) : rpMarker.remove(); } catch {} }
   rpMarker = null; rpEl = null;
 }
-function rpInit(raw, tripKm) {
+function rpInit(raw, tripKm, realT) {
   rpStop(); rpRemoveMarker();
   const box = document.getElementById('replay');
   if (!raw || raw.length < 2 || !mapKind) { box.classList.remove('on'); rp = null; return; }
@@ -373,7 +408,7 @@ function rpInit(raw, tripKm) {
   const si = RP_STEPS.indexOf(rpPref.speed);
   const pathKm = cum[cum.length - 1];
   const kmScale = tripKm > 0 && pathKm > 0 ? tripKm / pathKm : 1;          // 표시 거리는 계기판 거리 기준으로 맞춤
-  rp = { raw, cum, spd, brg, t0, t1, kmScale, pos: 0, playing: false, si: si >= 0 ? si : 0 };
+  rp = { raw, cum, spd, brg, t0, t1, kmScale, realT: realT || null, pos: 0, playing: false, si: si >= 0 ? si : 0 };
   document.getElementById('rpFollow').checked = !!rpPref.follow;
   document.getElementById('rpSkip').checked = rpPref.skip !== false;
   box.classList.add('on');
@@ -392,7 +427,9 @@ function rpAt(pos) {
   const tt = t0 + pos * (t1 - t0);
   const i = rpIndex(tt);
   const a = raw[i-1], b = raw[i], f = b[0] > a[0] ? Math.min(1, Math.max(0, (tt - a[0]) / (b[0] - a[0]))) : 1;
-  return { i, lat: a[1] + (b[1] - a[1]) * f, lng: a[2] + (b[2] - a[2]) * f, t: tt, v: spd[i], km: cum[i-1] + (cum[i] - cum[i-1]) * f, brg: brg[i], moving: cum[i] - cum[i-1] > 0.003 };
+  let real = tt;
+  if (rp.realT) { const ra = rp.realT[i-1], rb = rp.realT[i]; real = rb - ra > 120000 ? (f < 0.5 ? ra : rb) : ra + (rb - ra) * f; }   // 하루 재생: 주차 시간은 건너뛰고 실제 시각 표시
+  return { i, real, lat: a[1] + (b[1] - a[1]) * f, lng: a[2] + (b[2] - a[2]) * f, t: tt, v: spd[i], km: cum[i-1] + (cum[i] - cum[i-1]) * f, brg: brg[i], moving: cum[i] - cum[i-1] > 0.003 };
 }
 const hms = (ms) => { const d = kd(ms); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
 const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
@@ -404,7 +441,7 @@ function rpSeek(pos, user) {
   document.getElementById('rpBar').value = Math.round(rp.pos * 1000);
   const total = rp.cum[rp.cum.length - 1] * rp.kmScale;
   document.getElementById('rpInfo').innerHTML =
-    `<span><b>${hms(p.t)}</b> · <b>${Math.round(p.v)}</b>km/h</span><span>${(p.km * rp.kmScale).toFixed(1)} / ${total.toFixed(1)}km · ${mmss(p.t - rp.t0)} / ${mmss(rp.t1 - rp.t0)}</span>`;
+    `<span><b>${hms(p.real)}</b> · <b>${Math.round(p.v)}</b>km/h</span><span>${(p.km * rp.kmScale).toFixed(1)} / ${total.toFixed(1)}km · ${mmss(p.t - rp.t0)} / ${mmss(rp.t1 - rp.t0)}</span>`;
   const follow = document.getElementById('rpFollow').checked;
   if (mapKind === 'kakao' && kmap) {
     const ll = new kakao.maps.LatLng(p.lat, p.lng);
@@ -817,8 +854,11 @@ function drawLeaflet(pts, opt = {}) {
   }, 50);
 }
 // 상세/실시간 화면은 기록(history)에 한 칸 쌓아서, 폰의 뒤로가기 버튼으로 목록에 돌아오게 함
+let fromPop = false;
 function pushDetail(hash) {
-  if (history.state && history.state.detail) return history.replaceState({ detail: true }, '', hash);
+  if (fromPop) { fromPop = false; return; }                         // 뒤로가기로 다시 그리는 중이면 기록 안 쌓음
+  // 하루 전체 화면에서 개별 주행을 열면 한 칸 더 쌓아서, 뒤로가기 → 하루 전체 화면으로
+  if (history.state && history.state.detail && !location.hash.startsWith('#day=')) return history.replaceState({ detail: true }, '', hash);
   if (!history.state) history.replaceState({ list: true }, '', location.pathname);
   history.pushState({ detail: true }, '', hash);
 }
@@ -829,8 +869,10 @@ function closeDetail() {
 }
 window.addEventListener('popstate', (e) => {
   if (e.state && e.state.detail) {
-    const m = location.hash.match(/trip=(\d{8}-\d{6})/);
-    if (m && !document.getElementById('detail').classList.contains('show')) openDetail(m[1]);
+    const m = location.hash.match(/trip=(\d{8}-\d{6})/), dm = location.hash.match(/day=(\d{4}-\d{2}-\d{2})/);
+    setTimeout(() => { fromPop = false; }, 3000);
+    if (m) { fromPop = true; openDetail(m[1]); }
+    else if (dm) { fromPop = true; openDay(dm[1]); }
     return;
   }
   hideDetail();
