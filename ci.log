@@ -1,0 +1,40 @@
+C:\Users\runneradmin\AppData\Local/DriveLog:
+total 4741
+drwxr-xr-x 1 runneradmin 197121       0 Nov 26 05:55 .
+drwxr-xr-x 1 runneradmin 197121       0 Nov 26 05:55 ..
+-rw-r--r-- 1 runneradmin 197121     384 Nov 26 05:54 DriveLog.vbs
+drwxr-xr-x 1 runneradmin 197121       0 Nov 26 05:55 app
+drwxr-xr-x 1 runneradmin 197121       0 Nov 26 05:55 bin
+-rw-r--r-- 1 runneradmin 197121   29373 Nov 26 05:54 icon.ico
+drwxr-xr-x 1 runneradmin 197121       0 Nov 26 05:55 node
+-rw-r--r-- 1 runneradmin 197121  418511 Nov 26 05:55 unins000.dat
+-rwxr-xr-x 1 runneradmin 197121 4382120 Nov 26 05:55 unins000.exe
+
+C:\Users\runneradmin\AppData\Local/DriveLog/bin:
+total 65772
+drwxr-xr-x 1 runneradmin 197121        0 Nov 26 05:55 .
+drwxr-xr-x 1 runneradmin 197121        0 Nov 26 05:55 ..
+-rwxr-xr-x 1 runneradmin 197121 22851072 Nov 26 05:53 drivelog-tunnel.exe
+-rwxr-xr-x 1 runneradmin 197121 31363072 Nov 26 05:53 fleet-telemetry.exe
+-rwxr-xr-x 1 runneradmin 197121 13124608 Nov 26 05:53 tesla-http-proxy.exe
+
+C:\Users\runneradmin\AppData\Local/DriveLog/node:
+total 85044
+drwxr-xr-x 1 runneradmin 197121        0 Nov 26 05:55 .
+drwxr-xr-x 1 runneradmin 197121        0 Nov 26 05:55 ..
+-rwxr-xr-x 1 runneradmin 197121 87077704 Nov 26 05:54 drivelog-node.exe
+STATE: {"tailscale":{"state":"NeedsLogin","authUrl":"https://login.tailscale.com/a/ga892d72cb0faae1b","domain":"","funnel":false,"funnelUrl":"https://login.tailscale.com/admin/acls/file","certOK":false,"serveApplied":false,"error":""},"app":{"hasClient":false,"clientId":"","suggestName":"DriveLog FF16"},"publicKey":false,"partner":false,"loggedIn":false,"vin":"","vehicleName":"","paired":null,"notify":{"topic":"drivelog-5379ca85ba91","ok":false},"telemetry":{"exp":0,"synced":false,"running":false},"carName":"내 테슬라","dashboardLocal":"http://localhost:8090","dashboardPhone":null,"releases":"https://github.com/silkmini9012-bit/new/releases/latest","lastError":""}
+OK: wizard + tunnel (Tailscale login URL issued)
+[] OK: local dashboard
+OK: public dashboard requires token
+{"host":"127.0.0.1","port":14443,"log_level":"info","json_log_enable":true,"namespace":"t","reliable_ack":false,"records":{"V":["mqtt"]},"mqtt":{"broker":"127.0.0.1:1883","client_id":"smoke","topic_base":"tesla","qos":1},"tls":{"server_cert":"C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\ft\\cert.pem","server_key":"C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\ft\\key.pem"}}2026/11/26 05:55:27 maxprocs: Leaving GOMAXPROCS=4: CPU quota undefined
+{"activity":true,"context":"fleet-telemetry","level":"info","msg":"config_skipping_empty_metrics_provider","time":"2026-11-26T05:55:27.468133Z"}
+{"activity":true,"context":"fleet-telemetry","level":"info","msg":"starting_server","time":"2026-11-26T05:55:27.468133Z"}
+{"activity":true,"context":"fleet-telemetry","level":"info","msg":"2026/11/26 05:55:27 http: TLS handshake error from 127.0.0.1:54738: unexpected EOF\n","time":"2026-11-26T05:55:27.9444602Z"}
+OK: fleet-telemetry listening
+
+Do not listen on a network interface without adding client authentication. Unauthorized clients may
+be used to create excessive traffic from your IP address to Tesla's servers, which Tesla may respond
+to by rate limiting or blocking your connections.
+OK: tesla-http-proxy listening
+ALL SMOKE TESTS PASSED
